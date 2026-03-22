@@ -1,0 +1,232 @@
+# HashQuery
+
+Perl の AOH（Array of Hash）をインメモリで DSL 的に操作するモジュール。
+
+---
+
+## 概要
+
+`HashQuery` は、AOH をテーブルとして扱い、`where` / `having` / `select` を Perl の構文として自然に書けるようにしたモジュールです。外部エンジンや実行レイヤーは存在せず、`query` だけが実行関数です。
+
+```perl
+use HashQuery;
+
+my $tbl;
+my $result = query
+    $table,
+    as   $tbl,
+    select [qw/name score/],
+    where  { $tbl->{score} >= 80 },
+    having { count_by('grade') > 1 };
+```
+
+---
+
+## 主な機能
+
+| 関数 | 役割 |
+|---|---|
+| `query` | 唯一の実行関数。AOH を受け取り、DSL を解釈して AOH を返す |
+| `as` | `where` / `having` 内で使う行エイリアス変数を指定する |
+| `select` | 出力列を絞る（行数は変わらない） |
+| `where` | 行フィルタ。条件が真の行だけを残す |
+| `having` | 集計フィルタ。`count_by` 等の集計関数と組み合わせる |
+| `count_by` | グループ内の件数を返す（`having` 内専用） |
+| `max_by` | グループ内の最大値を返す（`having` 内専用） |
+| `min_by` | グループ内の最小値を返す（`having` 内専用） |
+| `first_by` | 現在行がグループ先頭なら真（`having` 内専用） |
+| `last_by` | 現在行がグループ末尾なら真（`having` 内専用） |
+
+---
+
+## インストール
+
+依存モジュールをインストールしてから `src/` を `@INC` に追加して使います。
+
+```bash
+cpanm Clone
+```
+
+```perl
+use lib 'src';
+use HashQuery;
+```
+
+---
+
+## 使用方法
+
+### 基本
+
+```perl
+use lib 'src';
+use HashQuery;
+
+my $table = [
+    { name => 'alice', score => 90, grade => 'A' },
+    { name => 'bob',   score => 75, grade => 'B' },
+    { name => 'carol', score => 85, grade => 'A' },
+];
+
+# where で行フィルタ
+my $result = query $table, where { $_->{score} >= 80 };
+# => alice, carol
+
+# select で列を絞る
+my $result = query $table, select [qw/name score/];
+
+# select '*' または select で全列
+my $result = query $table, select '*';
+
+# select except で指定列だけ除外
+my $result = query $table, select { except => ['grade'] };
+```
+
+### as でエイリアス変数を使う
+
+```perl
+our $row;
+my $result = query $table, as $row, where { $row->{score} >= 80 };
+```
+
+`as` を使った場合、`where` / `having` 内では `$row` が現在行を指します。`as` を省略した場合は `$_` を使います。
+
+### where の条件メソッド
+
+```perl
+# like（% は任意文字列、_ は任意1文字）
+where { $_->{name}->like('al%') }
+
+# not_like
+where { $_->{name}->not_like('%ob') }
+
+# between（境界含む）
+where { $_->{score}->between(80, 90) }
+
+# between（排他境界、値の後ろに ! を付ける）
+where { $_->{score}->between('80!', '90!') }  # 80 < score < 90
+
+# in
+where { $_->{grade}->in(['A', 'B']) }
+
+# not_in
+where { $_->{grade}->not_in(['C']) }
+
+# asNull（undef または空文字のときデフォルト値を返す）
+where { $_->{score}->asNull(0) >= 80 }
+```
+
+### having で集計フィルタ
+
+```perl
+our $row;
+my $result = query
+    $table,
+    as $row,
+    having { count_by('grade') > 1 };
+# grade ごとの件数が 1 より多いグループに属する行を残す
+
+# max_by / min_by
+having { max_by('score', 'grade') >= 85 }
+having { min_by('score', 'grade') >= 75 }
+
+# first_by / last_by（グループの先頭・末尾行だけを残す）
+having { first_by('grade') }
+having { last_by('grade') }
+```
+
+集計関数のグループキーは `count_by(qw/a b/)` のように複数列指定も可能です。
+
+### where + having + select の組み合わせ
+
+```perl
+our $row;
+my $result = query
+    $table,
+    as   $row,
+    select { except => ['grade'] },
+    where  { $row->{score} >= 75 },
+    having { count_by('grade') > 1 };
+```
+
+記述順序と実行順序は独立しています。実行は常に `as → select解析 → where → having集計 → having評価 → select射影` の順です。
+
+---
+
+## テスト
+
+```bash
+perl test/hashquery.t
+```
+
+`Test::More` を使っています。
+
+```
+1..30
+ok 1 - query: DSLなしで全行全列を返す
+ok 2 - query: 空テーブルを渡すと空配列を返す
+...
+ok 30 - 組み合わせ: スペック記載のフルサンプル
+```
+
+### テストの構成
+
+| 対象 | 内容 |
+|---|---|
+| `query` 基本 | DSLなし・空テーブル・不正入力 die・列不一致 die |
+| `select` | 明示列・except・`'*'`・引数なし |
+| `where` | `$_` フィルタ・`as` + alias・like / not_like・between（境界含む/排他）・in / not_in・asNull |
+| `having` | count_by・max_by・min_by・first_by・last_by・having 外呼び出し die |
+| 組み合わせ | where + having + select・except との組み合わせ・フルサンプル |
+
+---
+
+## プロジェクト構成
+
+```
+.
+├── src/
+│   └── HashQuery.pm       # モジュール本体
+├── test/
+│   └── hashquery.t        # テストコード
+├── examples/
+│   └── sample_usage.pl    # 使用例
+├── docs/
+│   ├── HashQuery_Spec.md  # 仕様書
+│   └── CodingRule.md      # コーディングルール
+└── README.md
+```
+
+---
+
+## 設計方針
+
+[docs/HashQuery_Spec.md](docs/HashQuery_Spec.md) に基づきます。主な方針は以下のとおりです。
+
+- **実行できるのは `query` だけ。** `select` / `as` / `where` / `having` は DSL キー・値を返す関数であり、自身は何も実行しない。
+- **入出力はすべて AOH。** `query` の第一引数も戻り値も AOH。
+- **括弧なしで書けること。** 各 DSL 部分はプロトタイプにより括弧なしで記述できる。
+- **外部実行レイヤーなし。** `from` / `group_by` / `distinct` は存在しない。
+- **集計は `having` 内のみ。** `count_by` 等は `having` ブロックの外では使えない。
+- **集計対象は `where` 後のテーブル。** 入力直後のテーブルを直接集計対象にはしない。
+
+---
+
+## コーディングルール
+
+[docs/CodingRule.md](docs/CodingRule.md) に基づきます。要点は以下のとおりです。
+
+- 変数名は小文字基本、役割を直接表す名前を使う（`ref` ではなく `alias`、`part` ではなく `dsl`）
+- 複数要素は複数形（`@dsls`、`@rows`、`@cols`）
+- 仕様上の用語をそのまま使う（`dsl`、`alias`、`select`、`where`、`having`）
+- 短くても文脈と一致することを優先する
+
+---
+
+## 制約・注意点
+
+- 入力テーブルの全行は同じキーセットを持つ必要がある。異なる場合は `die` する。
+- `count_by` / `max_by` / `min_by` / `first_by` / `last_by` は `having` ブロック外で呼ぶと `die` する。
+- `as` に渡す変数は `our`（パッケージ変数）で宣言する必要がある。`my` では動作しない。
+- `select` の引数は配列リファレンスで渡す（配列そのものではない）。
+- `having` の集計対象は `where` 後のテーブルであり、元の入力テーブルではない。
