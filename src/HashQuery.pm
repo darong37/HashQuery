@@ -55,6 +55,10 @@ sub query ($@) {
     my $tbl = clone($table);
     my $cols;
 
+    for my $i (0 .. $#$tbl) {
+        $tbl->[$i]{_idx} = $i;
+    }
+
     if ($exc) {
         my %skip = map { $_ => 1 } @{ $exc->{except} };
         $cols = [ grep { !$skip{$_} } @all ];
@@ -121,20 +125,21 @@ sub last_by  { return HashQuery::HavingContext::last_by(@_) }
 sub _run_where {
     my ($table, $as, $whr) = @_;
     my $alias = $as ? $as->{alias} : undef;
+    my @hit;
 
-    my @hit = grep {
-        my $row = $_;
-        my $h = HashQuery::RowHash->new($row);
+    for my $i (0 .. $#$table) {
+        my $row = $table->[$i];
+        my $h   = HashQuery::RowHash->new($row, $table, $i);
         local $_ = $h;
 
         if ($alias) {
             $$alias = $h;
-            $whr->{where}->() ? 1 : 0;
+            push @hit, $row if $whr->{where}->();
         }
         else {
-            $whr->{where}->() ? 1 : 0;
+            push @hit, $row if $whr->{where}->();
         }
-    } @$table;
+    }
 
     return \@hit;
 }
@@ -142,22 +147,23 @@ sub _run_where {
 sub _run_having {
     my ($table, $as, $hvg) = @_;
     my $alias = $as ? $as->{alias} : undef;
+    my @hit;
 
-    my @hit = grep {
-        my $row = $_;
-        my $h = HashQuery::RowHash->new($row);
+    for my $i (0 .. $#$table) {
+        my $row = $table->[$i];
+        my $h   = HashQuery::RowHash->new($row, $table, $i);
         local $_ = $h;
-        local $HashQuery::HavingContext::ROW = $row;
+        local $HashQuery::HavingContext::ROW   = $row;
         local $HashQuery::HavingContext::TABLE = $table;
 
         if ($alias) {
             $$alias = $h;
-            $hvg->{having}->() ? 1 : 0;
+            push @hit, $row if $hvg->{having}->();
         }
         else {
-            $hvg->{having}->() ? 1 : 0;
+            push @hit, $row if $hvg->{having}->();
         }
-    } @$table;
+    }
 
     return \@hit;
 }
@@ -337,20 +343,20 @@ use strict;
 use warnings;
 
 sub new {
-    my ($class, $row) = @_;
+    my ($class, $row, $table, $idx) = @_;
     my %hash;
-    tie %hash, $class, $row;
-    return \%hash;
+    tie %hash, $class, $row, $table, $idx;
+    return bless \%hash, $class;
 }
 
 sub TIEHASH {
-    my ($class, $row) = @_;
-    return bless { row => $row }, $class;
+    my ($class, $row, $table, $idx) = @_;
+    return bless { row => $row, table => $table, idx => $idx }, $class;
 }
 
 sub FETCH {
     my ($self, $key) = @_;
-    return HashQuery::Value->new($self->{row}, $key);
+    return HashQuery::Value->new($self->{row}, $key, $self->{table}, $self->{idx});
 }
 
 1;
@@ -367,10 +373,12 @@ use overload
     fallback => 1;
 
 sub new {
-    my ($class, $row, $key) = @_;
+    my ($class, $row, $key, $table, $idx) = @_;
     return bless {
-        row => $row,
-        key => $key,
+        row   => $row,
+        key   => $key,
+        table => $table,
+        idx   => $idx,
     }, $class;
 }
 
@@ -438,6 +446,33 @@ sub asNull {
 
     return $default if !defined $value || $value eq '';
     return $value;
+}
+
+sub grep_concat {
+    my ($self, $pattern, $start, $end) = @_;
+    $start //= 0;
+    $end   //= $start;
+
+    my $value = $self->_value;
+    return '' unless defined $value && $value =~ $pattern;
+
+    my $table = $self->{table};
+    my $idx   = $self->{idx};
+
+    my $from = $idx + $start;
+    my $to   = $idx + $end;
+    $from = 0          if $from < 0;
+    $to   = $#$table   if $to > $#$table;
+
+    my $result = '';
+    for my $r (@{$table}[$from .. $to]) {
+        $result .= join ' ', map { defined $r->{$_} ? "$r->{$_}" : '' }
+                             grep { $_ ne '_idx' }
+                             sort keys %$r;
+        $result .= "\n";
+    }
+
+    return $result;
 }
 
 sub _parse_bound {
