@@ -252,8 +252,9 @@ sub grep_concat {
     my $row   = _require_row('grep_concat');
     my $table = _require_table('grep_concat');
 
+    my $re    = qr/(?s)$pattern/;
     my $value = $row->{$col};
-    return '' unless defined $value && $value =~ $pattern;
+    return '' unless defined $value && $value =~ $re;
 
     my $idx = $row->{_idx};
 
