@@ -849,4 +849,10 @@ subtest 'grep_concat: 指定カラムの値と等値比較できること' => su
         '結果が "dave\n" と等しい';
 };
 
+subtest 'as: クエリ完了後にレコード数が格納される' => sub {
+    our $tc;
+    query \@base, as $tc, where { $_->{b} == 10 };
+    is $tc, 2;
+};
+
 done_testing;

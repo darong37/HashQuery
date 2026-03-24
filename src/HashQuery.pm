@@ -78,6 +78,7 @@ sub query ($@) {
     $tbl = _run_having($tbl, $as, $hvg) if $hvg;
     $tbl = _run_select($tbl, $cols);
 
+    ${ $as->{alias} } = scalar @$tbl if $as;
     return $tbl;
 }
 
