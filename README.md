@@ -31,24 +31,44 @@ my $result = query
 | `select` | 出力列を絞る（行数は変わらない） |
 | `where` | 行フィルタ。条件が真の行だけを残す |
 | `having` | 集計フィルタ。`count_by` 等の集計関数と組み合わせる |
-| `count_by` | グループ内の件数を返す（`having` 内専用） |
-| `max_by` | グループ内の最大値を返す（`having` 内専用） |
-| `min_by` | グループ内の最小値を返す（`having` 内専用） |
-| `first_by` | 現在行がグループ先頭なら真（`having` 内専用） |
-| `last_by` | 現在行がグループ末尾なら真（`having` 内専用） |
+
+### having 専用の集計関数
+
+`having` ブロック内でのみ使用できます。ブロック外で呼ぶと `die` します。
+
+| 関数 | 役割 |
+|---|---|
+| `count_by($key, ...)` | グループ内の件数を返す |
+| `max_by($col, $key, ...)` | グループ内の指定列の最大値を返す |
+| `min_by($col, $key, ...)` | グループ内の指定列の最小値を返す |
+| `first_by($key, ...)` | 現在行がグループ先頭なら真を返す |
+| `last_by($key, ...)` | 現在行がグループ末尾なら真を返す |
+
+### where / having で使用できるメソッド
+
+行の値（`$_->{col}` または `$alias->{col}`）に対してチェーン呼び出しできます。
+
+| メソッド | 役割 |
+|---|---|
+| `like($pattern)` | SQL LIKE パターンマッチング（`%` は任意文字列、`_` は任意1文字） |
+| `not_like($pattern)` | `like` の否定 |
+| `between($min, $max)` | 範囲比較（値の後ろに `!` を付けると境界を排他にできる） |
+| `in(@list)` | リスト内一致（配列リファレンスでも可） |
+| `not_in(@list)` | `in` の否定 |
+| `asNull($default)` | `undef` または空文字のときデフォルト値を返す |
+| `grep_concat($pattern, $start, $end)` | パターンにマッチした行の前後コンテキストを改行区切りで連結した文字列を返す |
 
 ---
 
 ## インストール
 
-依存モジュールをインストールしてから `src/` を `@INC` に追加して使います。
+依存モジュールをインストール後、`HashQuery.pm` を `@INC` の通ったパスに配置して使います。
 
 ```bash
 cpanm Clone
 ```
 
 ```perl
-use lib 'src';
 use HashQuery;
 ```
 
@@ -59,7 +79,6 @@ use HashQuery;
 ### 基本
 
 ```perl
-use lib 'src';
 use HashQuery;
 
 my $table = [
