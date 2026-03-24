@@ -891,6 +891,13 @@ val=42 は asNull の影響を受けず元の値でマッチ（1行）
 
 ## 8. grep_concat
 
+> **既知の不具合**: 現在の実装では、`grep_concat` の返却文字列に**指定カラム以外の値が混入**します。
+> 原因・詳細はセクション 19 の不具合再現テスト（No.89〜92）を参照してください。
+> 新仕様（チェーンメソッド廃止・WHERE 用関数として再定義）はセクション 18 に記載します。
+>
+> **コード修正後の対応**: セクション 8（No.46〜53）およびセクション 16（No.81〜84）のテストは、
+> チェーンメソッド API に依存しているため、コード修正時に**削除または新仕様のテストへ置き換え**る。
+
 ### No.46 一致しない行は空文字を返す
 
 ```perl
@@ -1749,8 +1756,11 @@ c カラムは存在しない。a のソート済みリストが `[alice, bob, d
 返却された文字列に対して `=~` または `!~` で正規表現マッチングを行うことで、
 周囲の行の内容を条件としたフィルタリングが実現できる。
 
-> **コンテキスト文字列の形式**: 各行の列値をソート順・スペース区切りで連結し改行を付加する（`_idx` を除く）
+> **コンテキスト文字列の形式（現在の実装）**: 各行の**全カラム**の値をソート順・スペース区切りで連結し改行を付加する（`_idx` を除く）。
 > 例: `{ line => 2, msg => 'ERROR connection failed' }` → `"2 ERROR connection failed\n"`
+>
+> **注意**: この形式は既知の不具合によるものです。正しい仕様では**指定カラムの値のみ**が結果に含まれるべきです（セクション 18 参照）。
+> セクション 16 のテスト（No.81〜84）はこの現状の形式を前提として記述されており、現在の実装では合格します。
 
 ---
 
@@ -2018,3 +2028,190 @@ where 適用後の中間テーブル（score >= 75）とチームごとの先頭
 | alpha | alice | 90    |
 | beta  | dave  | 88    |
 | gamma | frank | 95    |
+
+---
+
+## 18. WHERE 用関数 — grep_concat 新仕様
+
+`grep_concat` をチェーンメソッドから独立した WHERE 専用関数として再定義する。
+
+### 関数シグネチャ
+
+```perl
+grep_concat($col, $pattern, $start, $end)
+```
+
+| 引数 | 型 | 省略 | 説明 |
+|---|---|---|---|
+| `$col` | 文字列 | 不可 | 対象カラム名 |
+| `$pattern` | Regexp | 不可 | マッチングパターン |
+| `$start` | 整数 | 可（デフォルト: 0） | 現在行からの開始オフセット |
+| `$end` | 整数 | 可（デフォルト: `$start`） | 現在行からの終了オフセット |
+
+### 仕様
+
+- `$col` で指定したカラムの値が `$pattern` にマッチした場合、当該行を起点に `$start`〜`$end` の範囲の行を収集する
+- 収集した各行について、**`$col` カラムの値のみ**を改行区切りで連結して返す
+- **他カラムの値が結果文字列に含まれてはならない**
+- `$col` カラムの値が `undef` または空文字の場合は空文字を返す
+- WHERE ブロック外で呼び出した場合は `die` する
+
+### カテゴリ分類：WHERE 専用の根拠
+
+`grep_concat` は行の位置的関係に基づく探索・抽出処理であり、グループ集計を担う `having` 用関数（`count_by` / `max_by` 等）とは責務が異なる。`where` 内での行フィルタリングに特化した関数として独立カテゴリに分類する。
+
+### 使用例
+
+```perl
+# msg カラムに ERROR を含む行を起点に、前後1行を含むコンテキストの msg 値を連結
+where { grep_concat('msg', qr/ERROR/, -1, 1) ne '' }
+```
+
+戻り値の例（`@log_tbl` の line=2 の場合）:
+
+```
+INFO  start
+ERROR connection failed
+INFO  retrying
+```
+
+他カラム（`line` 等）の値は含まれない。
+
+---
+
+## 19. grep_concat — 不具合再現テスト
+
+> **注意**: このセクションのテストは**現在の実装では FAIL する**。
+> 新仕様（セクション 18）を正しく実装した場合に合格することを確認するためのリグレッションテスト。
+
+現在の `grep_concat`（チェーンメソッド）を使用し、正しい仕様（指定カラムの値のみが返る）を期待値として記述する。
+現状の実装では他カラムの値が混入するため、これらのテストは失敗する。
+
+> **コード修正後の対応**: このセクション（No.89〜92）は**コード修正時に削除し、新仕様の正常系テストへ置き換える**。
+> 新仕様テストでは呼び出し形式を `grep_concat('col', qr/.../, $start, $end)` に変更し、合格するテストとして再定義する。
+> No.89〜92 はあくまで「修正前の状態での不具合の可視化」を目的とした一時的なテストである。
+
+---
+
+### No.89 指定カラムの値のみが結果に含まれる（単一行・2カラムテーブル）
+
+```perl
+our $tbug1;
+my @results;
+query \@log_tbl,
+    as $tbug1,
+    where {
+        my $s = $tbug1->{msg}->grep_concat(qr/ERROR/, 0, 0);
+        push @results, $s if $s ne '';
+        1;
+    };
+```
+
+**入力テーブル** — `@log_tbl`
+
+| line | msg                     |
+|------|-------------------------|
+| 1    | INFO  start             |
+| 2    | ERROR connection failed |
+| 3    | INFO  retrying          |
+| 4    | ERROR timeout           |
+| 5    | INFO  done              |
+
+**期待結果**
+
+- `@results` に 2件収集される
+- 各結果が数値で始まらない（`line` カラムの値が混入していない）
+
+**現状結果（不具合）**
+
+- `@results` = `["2 ERROR connection failed\n", "4 ERROR timeout\n"]`
+- 各結果が `line` の値（2, 4）で始まっており、仕様に違反する
+
+---
+
+### No.90 コンテキスト行でも指定カラムのみが含まれる
+
+```perl
+our $tbug2;
+my @results;
+query \@log_tbl,
+    as $tbug2,
+    where {
+        my $s = $tbug2->{msg}->grep_concat(qr/ERROR/, -1, 1);
+        push @results, $s if $s ne '';
+        1;
+    };
+```
+
+**入力テーブル** — `@log_tbl`
+
+**期待結果**
+
+- `@results` に 2件収集される
+- 各結果の全行が数値で始まらない（コンテキスト行にも `line` の値が混入していない）
+- 例: `"INFO  start\nERROR connection failed\nINFO  retrying\n"`
+
+**現状結果（不具合）**
+
+- `@results` = `["1 INFO  start\n2 ERROR connection failed\n3 INFO  retrying\n", ...]`
+- コンテキスト各行の先頭に `line` の値が混入している
+
+---
+
+### No.91 多カラムテーブルで指定カラム以外の値が混入しない
+
+```perl
+our $tbug3;
+my @results;
+query \@members,
+    as $tbug3,
+    where {
+        my $s = $tbug3->{name}->grep_concat(qr/alice/, 0, 0);
+        push @results, $s if $s ne '';
+        1;
+    };
+```
+
+**入力テーブル** — `@members`（4カラム: team / name / role / score）
+
+| team  | name  | role   | score |
+|-------|-------|--------|-------|
+| alpha | alice | lead   | 90    |
+| alpha | bob   | member | 75    |
+| ...   | ...   | ...    | ...   |
+
+**期待結果**
+
+- `@results` に 1件収集される
+- `$results[0]` が `"alice\n"` と等しい（`name` カラムの値のみ）
+
+**現状結果（不具合）**
+
+- `$results[0]` = `"alice lead 90 alpha\n"`（`name` / `role` / `score` / `team` 全カラムが混入）
+
+---
+
+### No.92 指定カラムの値と等値比較できること
+
+```perl
+our $tbug4;
+my @results;
+query \@members,
+    as $tbug4,
+    where {
+        my $s = $tbug4->{name}->grep_concat(qr/dave/, 0, 0);
+        push @results, $s if $s ne '';
+        1;
+    };
+```
+
+**入力テーブル** — `@members`
+
+**期待結果**
+
+- `@results` に 1件収集される
+- `$results[0]` が `"dave\n"` と等しい
+
+**現状結果（不具合）**
+
+- `$results[0]` = `"dave lead 88 beta\n"` → `eq "dave\n"` が偽

@@ -17,6 +17,7 @@ our @EXPORT = qw(
     min_by
     first_by
     last_by
+    grep_concat
 );
 
 sub query ($@) {
@@ -116,11 +117,12 @@ sub having (&) {
     return { having => $code };
 }
 
-sub count_by { return HashQuery::HavingContext::count_by(@_) }
-sub max_by   { return HashQuery::HavingContext::max_by(@_) }
-sub min_by   { return HashQuery::HavingContext::min_by(@_) }
-sub first_by { return HashQuery::HavingContext::first_by(@_) }
-sub last_by  { return HashQuery::HavingContext::last_by(@_) }
+sub count_by    { return HashQuery::HavingContext::count_by(@_) }
+sub max_by      { return HashQuery::HavingContext::max_by(@_) }
+sub min_by      { return HashQuery::HavingContext::min_by(@_) }
+sub first_by    { return HashQuery::HavingContext::first_by(@_) }
+sub last_by     { return HashQuery::HavingContext::last_by(@_) }
+sub grep_concat { return HashQuery::WhereContext::grep_concat(@_) }
 
 sub _run_where {
     my ($table, $as, $whr) = @_;
@@ -131,6 +133,8 @@ sub _run_where {
         my $row = $table->[$i];
         my $h   = HashQuery::RowHash->new($row, $table, $i);
         local $_ = $h;
+        local $HashQuery::WhereContext::ROW   = $row;
+        local $HashQuery::WhereContext::TABLE = $table;
 
         if ($alias) {
             $$alias = $h;
@@ -236,6 +240,54 @@ package HashQuery::WhereContext;
 
 use strict;
 use warnings;
+
+our $ROW;
+our $TABLE;
+
+sub grep_concat {
+    my ($col, $pattern, $start, $end) = @_;
+    $start //= 0;
+    $end   //= $start;
+
+    my $row   = _require_row('grep_concat');
+    my $table = _require_table('grep_concat');
+
+    my $value = $row->{$col};
+    return '' unless defined $value && $value =~ $pattern;
+
+    my $idx = $row->{_idx};
+
+    my $from = $idx + $start;
+    my $to   = $idx + $end;
+    $from = 0          if $from < 0;
+    $to   = $#$table   if $to > $#$table;
+
+    my $result = '';
+    for my $r (@{$table}[$from .. $to]) {
+        my $v = defined $r->{$col} ? "$r->{$col}" : '';
+        $result .= $v . "\n";
+    }
+
+    return $result;
+}
+
+sub _require_row {
+    my ($name) = @_;
+
+    die "$name can only be used inside where"
+        unless $ROW;
+
+    return $ROW;
+}
+
+sub _require_table {
+    my ($name) = @_;
+
+    die "$name can only be used inside where"
+        unless $TABLE;
+
+    return $TABLE;
+}
 
 1;
 
@@ -446,33 +498,6 @@ sub asNull {
 
     return $default if !defined $value || $value eq '';
     return $value;
-}
-
-sub grep_concat {
-    my ($self, $pattern, $start, $end) = @_;
-    $start //= 0;
-    $end   //= $start;
-
-    my $value = $self->_value;
-    return '' unless defined $value && $value =~ $pattern;
-
-    my $table = $self->{table};
-    my $idx   = $self->{idx};
-
-    my $from = $idx + $start;
-    my $to   = $idx + $end;
-    $from = 0          if $from < 0;
-    $to   = $#$table   if $to > $#$table;
-
-    my $result = '';
-    for my $r (@{$table}[$from .. $to]) {
-        $result .= join ' ', map { defined $r->{$_} ? "$r->{$_}" : '' }
-                             grep { $_ ne '_idx' }
-                             sort keys %$r;
-        $result .= "\n";
-    }
-
-    return $result;
 }
 
 sub _parse_bound {
