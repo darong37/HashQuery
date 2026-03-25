@@ -115,7 +115,7 @@ our $row;
 my $result = query $table, as $row, where { $row->{score} >= 80 };
 ```
 
-`as` を使った場合、`where` / `having` 内では `$row` が現在行を指します。`as` を省略した場合は `$_` を使います。
+`as` を使った場合、`where` / `having` 内では `$row` が現在行を指します。`as` を省略した場合は `$_` を使います。クエリ完了後、`$row` には出力レコード数（スカラ値）が格納されます。
 
 ### where の条件メソッド
 
@@ -201,11 +201,11 @@ perl test/hashquery.t
 `Test::More` を使っています。
 
 ```
-1..30
+1..93
 ok 1 - query: DSLなしで全行全列を返す
 ok 2 - query: 空テーブルを渡すと空配列を返す
 ...
-ok 30 - 組み合わせ: スペック記載のフルサンプル
+ok 93 - as: クエリ完了後にレコード数が格納される
 ```
 
 ### テストの構成
@@ -215,7 +215,9 @@ ok 30 - 組み合わせ: スペック記載のフルサンプル
 | `query` 基本 | DSLなし・空テーブル・不正入力 die・列不一致 die |
 | `select` | 明示列・except・`'*'`・引数なし |
 | `where` | `$_` フィルタ・`as` + alias・like / not_like・between（境界含む/排他）・in / not_in・asNull |
+| `grep_concat` | 一致行の前後コンテキスト取得・境界クランプ・`=~` / `!~` 活用・指定カラムのみ返ること |
 | `having` | count_by・max_by・min_by・first_by・last_by・having 外呼び出し die |
+| `as` | クエリ完了後にレコード数が格納されること |
 | 組み合わせ | where + having + select・except との組み合わせ・フルサンプル |
 
 ---
@@ -225,14 +227,16 @@ ok 30 - 組み合わせ: スペック記載のフルサンプル
 ```
 .
 ├── src/
-│   └── HashQuery.pm       # モジュール本体
+│   └── HashQuery.pm            # モジュール本体
 ├── test/
-│   └── hashquery.t        # テストコード
+│   └── hashquery.t             # テストコード
 ├── examples/
-│   └── sample_usage.pl    # 使用例
+│   └── sample_usage.pl         # 使用例
 ├── docs/
-│   ├── HashQuery_Spec.md  # 仕様書
-│   └── CodingRule.md      # コーディングルール
+│   ├── HashQuery_Spec.md       # 仕様書
+│   ├── HashQuery_TestSpec.md   # テスト仕様書
+│   └── CodingRule.md           # コーディングルール
+├── CLAUDE.md                   # Claude Code 向け指示
 └── README.md
 ```
 
