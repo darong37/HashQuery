@@ -9,8 +9,8 @@ use Exporter 'import';
 our @EXPORT = qw(
     query
     as
-    select
-    delete
+    SELECT
+    DELETE
     where
     having
     count_by
@@ -72,7 +72,7 @@ sub query ($@) {
         $cols = $sel->{select};
     }
     else {
-        die 'invalid select node';
+        die 'invalid SELECT node';
     }
 
     $tbl = _run_where($tbl, $as, $whr) if $whr;
@@ -96,7 +96,7 @@ sub as (\$) {
     };
 }
 
-sub select (;$) {
+sub SELECT (;$) {
     my ($arg) = @_;
 
     if (!defined $arg || (!ref $arg && $arg eq '*')) {
@@ -111,7 +111,7 @@ sub select (;$) {
         return { except => [ @{ $arg->{except} } ] };
     }
 
-    die 'select accepts only "*", arrayref, or { except => [...] }';
+    die 'SELECT accepts only "*", arrayref, or { except => [...] }';
 }
 
 sub where (&) {
@@ -124,7 +124,7 @@ sub having (&) {
     return { having => $code };
 }
 
-sub delete() {
+sub DELETE () {
     return { delete => 1 };
 }
 
