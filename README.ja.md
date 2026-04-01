@@ -35,7 +35,7 @@ my $table = [
 our $row;
 my $result = query $table,
     as   $row,
-    select [qw/name score/],
+    SELECT [qw/name score/],
     where  { $row->{score} >= 80 },
     having { count_by('grade') > 1 };
 ```
@@ -50,7 +50,8 @@ my $result = query $table,
 |---|---|
 | `query` | 唯一の実行関数。AOH テーブルと DSL 部品を受け取り AOH を返す |
 | `as` | `where` / `having` ブロック内で使うエイリアス変数を指定する |
-| `select` | 出力列を指定する（行数は変わらない） |
+| `SELECT` | 出力列を指定する（行数は変わらない） |
+| `DELETE` | 削除モードを宣言する。`where` / `having` にマッチした行を削除し、残存行を返す |
 | `where` | 条件ブロックで行をフィルターする |
 | `having` | `count_by` / `max_by` 等を使った集約フィルター |
 
@@ -98,9 +99,9 @@ perl test/hashquery.t
 出力例:
 
 ```
-1..93
+1..104
 ok 1 - query: DSLなしで全行全列を返す
 ok 2 - query: 空テーブルを渡すと空配列を返す
 ...
-ok 93 - as: クエリ完了後にレコード数が格納される
+ok 104 - DELETE: SELECT と同じ条件で対称動作する
 ```

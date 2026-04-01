@@ -35,7 +35,7 @@ my $table = [
 our $row;
 my $result = query $table,
     as   $row,
-    select [qw/name score/],
+    SELECT [qw/name score/],
     where  { $row->{score} >= 80 },
     having { count_by('grade') > 1 };
 ```
@@ -50,7 +50,8 @@ See [docs/spec.md](docs/spec.md) for the full API reference.
 |---|---|
 | `query` | The only executor. Accepts an AOH table and DSL parts, returns AOH |
 | `as` | Binds an alias variable for use in `where` / `having` blocks |
-| `select` | Column projection (does not change row count) |
+| `SELECT` | Column projection (does not change row count) |
+| `DELETE` | Declares delete mode; rows matching `where` / `having` are removed, remaining rows returned |
 | `where` | Row filter with a condition block |
 | `having` | Aggregate filter; uses `count_by`, `max_by`, etc. |
 
@@ -98,9 +99,9 @@ perl test/hashquery.t
 Output:
 
 ```
-1..93
+1..104
 ok 1 - query: no DSL, returns all rows
 ok 2 - query: no DSL, returns all columns
 ...
-ok 93 - grep_concat: returned value equals column value
+ok 104 - DELETE: SELECT and DELETE are symmetric for same condition
 ```

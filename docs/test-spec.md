@@ -100,18 +100,18 @@
 | 7 | 無効な DSL 部品を渡すと die する | `query \@base, { unknown_key => 1 }` | `"invalid DSL"` を含むメッセージで die |
 | 8 | 入力テーブルは変更されない（不変性） | `@base` に対して `where { $_->{a} > 1 }` を実行 | クエリ後も `@base` の内容が変化しない |
 
-### 2. select
+### 2. SELECT
 
 | No. | 説明 | 入力 / 条件 | 期待結果 |
 |-----|------|------------|---------|
-| 9 | カラム明示指定で指定列のみ返す | `@base`、`select [qw/a b/]` | 列 a・b のみ存在、c は存在しない、行数 5 |
-| 10 | 行数は変わらない | `@base`、`select [qw/a/]` | 行数 5 |
-| 11 | except で指定カラムを除外する | `@base`、`select { except => ['c'] }` | a・b 存在、c は存在しない |
-| 12 | except で複数カラムを除外する | `@base`、`select { except => [qw/b c/] }` | 先頭行のキーが `[a]` のみ |
-| 13 | `'*'` で全列を返す | `@base`、`select '*'` | 先頭行のキーが `[a, b, c]`（ソート済み） |
-| 14 | 引数なしで全列を返す | `@base`、`select` | 先頭行のキーが `[a, b, c]`（ソート済み） |
-| 15 | `_idx` は出力に含まれない | `@base`、`select '*'` | 先頭行に `_idx` キーが存在しない |
-| 16 | `_idx` は明示指定しても出力に含まれない | `@base`、`select [qw/a b c/]` | 先頭行に `_idx` キーが存在しない |
+| 9 | カラム明示指定で指定列のみ返す | `@base`、`SELECT [qw/a b/]` | 列 a・b のみ存在、c は存在しない、行数 5 |
+| 10 | 行数は変わらない | `@base`、`SELECT [qw/a/]` | 行数 5 |
+| 11 | except で指定カラムを除外する | `@base`、`SELECT { except => ['c'] }` | a・b 存在、c は存在しない |
+| 12 | except で複数カラムを除外する | `@base`、`SELECT { except => [qw/b c/] }` | 先頭行のキーが `[a]` のみ |
+| 13 | `'*'` で全列を返す | `@base`、`SELECT '*'` | 先頭行のキーが `[a, b, c]`（ソート済み） |
+| 14 | 引数なしで全列を返す | `@base`、`SELECT` | 先頭行のキーが `[a, b, c]`（ソート済み） |
+| 15 | `_idx` は出力に含まれない | `@base`、`SELECT '*'` | 先頭行に `_idx` キーが存在しない |
+| 16 | `_idx` は明示指定しても出力に含まれない | `@base`、`SELECT [qw/a b c/]` | 先頭行に `_idx` キーが存在しない |
 
 ### 3. where
 
@@ -195,22 +195,35 @@
 
 | No. | 説明 | 入力 / 条件 | 期待結果 |
 |-----|------|------------|---------|
-| 23 | クエリ完了後にレコード数が格納される | `@base`、`as $tc`、`where { $_->{b} == 10 }` | クエリ後 `$tc` に `2` が格納される |
+| 23 | クエリ完了後にレコード数が格納される | `@base`、`as $tc`、`where { $_->{b} == 10 }` | クエリ後 `$tc->{count}` = 2、`$tc->{affect}` = 2 |
 
 ### 7. 組み合わせ
 
 | No. | 説明 | 入力 / 条件 | 期待結果 |
 |-----|------|------------|---------|
-| 73 | select を where より前に書いても同じ結果 | `@base`、パターン1: `select → where`、パターン2: `where → select` | `$r1` と `$r2` が等価 |
+| 73 | SELECT を where より前に書いても同じ結果 | `@base`、パターン1: `SELECT → where`、パターン2: `where → SELECT` | `$r1` と `$r2` が等価 |
 | 74 | having を where より前に書いても同じ結果 | `@base`、パターン1: `having → where`、パターン2: `where → having` | `$r1` と `$r2` が等価 |
 | 75 | as を後ろに書いても動作する | `@base`、`where { $td1->{b} == 10 }`、`as $td1`（as を where より後に記述） | 行数 2、alice と dave |
-| 76 | where + select | `@base`、`as $tc75`、`select [qw/a/]`、`where { $tc75->{b} == 10 }` | 行数 2、キーが `[a]` のみ |
-| 77 | where + select（except） | `@base`、`as $tc76`、`select { except => ['b'] }`、`where { $tc76->{b} == 10 }` | 行数 2、a・c 存在、b なし |
-| 78 | where + having + select | `@base`、`as $tc1`、`select [qw/a b/]`、`where { $tc1->{b} <= 20 }`、`having { count_by('b') > 1 }` | 行数 4、c カラムなし |
-| 79 | grep_concat + where で条件絞り込み | `@log_tbl`、`select [qw/line msg/]`、`where { grep_concat('msg', qr/ERROR/, 0, 0) ne '' }` | 行数 2、line=2, 4 |
+| 76 | where + SELECT | `@base`、`as $tc75`、`SELECT [qw/a/]`、`where { $tc75->{b} == 10 }` | 行数 2、キーが `[a]` のみ |
+| 77 | where + SELECT（except） | `@base`、`as $tc76`、`SELECT { except => ['b'] }`、`where { $tc76->{b} == 10 }` | 行数 2、a・c 存在、b なし |
+| 78 | where + having + SELECT | `@base`、`as $tc1`、`SELECT [qw/a b/]`、`where { $tc1->{b} <= 20 }`、`having { count_by('b') > 1 }` | 行数 4、c カラムなし |
+| 79 | grep_concat + where で条件絞り込み | `@log_tbl`、`SELECT [qw/line msg/]`、`where { grep_concat('msg', qr/ERROR/, 0, 0) ne '' }` | 行数 2、line=2, 4 |
 | 80 | where + having（having は where 後のテーブルを集計） | `@base`、`where { $tc79->{a} ne 'carol' }`、`having { count_by('b') > 1 }` | 行数 4（carol 除外後 b=10/20 は各 2件） |
 | 81 | スペック記載のフルサンプル | `@base`、`select { except => ['c'] }`、`where { a gt 'abc' and 10 <= b <= 20 }`、`having { b >= 10 and count_by > 1 and max_by > 100 }` | 行数 4、a: alice, bob, dave, eve、c カラムなし |
-| 86 | リードのみ絞り込んでチームと名前を取得 | `@members`、`select [qw/team name/]`、`where { $m1->{role} eq 'lead' }` | 行数 3、列 team・name のみ |
-| 87 | チームの最高スコアが90以上のチームのメンバーを取得 | `@members`、`select [qw/team name score/]`、`having { max_by('score', 'team') >= 90 }` | 行数 4、beta チームは除外 |
+| 86 | リードのみ絞り込んでチームと名前を取得 | `@members`、`SELECT [qw/team name/]`、`where { $m1->{role} eq 'lead' }` | 行数 3、列 team・name のみ |
+| 87 | チームの最高スコアが90以上のチームのメンバーを取得 | `@members`、`SELECT [qw/team name score/]`、`having { max_by('score', 'team') >= 90 }` | 行数 4、beta チームは除外 |
 | 88 | スコア75以上かつチームに2人以上いるメンバーを取得 | `@members`、`where { $m3->{score} >= 75 }`、`having { count_by('team') >= 2 }` | 行数 3、alpha チームのみ |
 | 89 | スコア75以上のメンバーからチームごとの先頭を取得 | `@members`、`where { $m4->{score} >= 75 }`、`having { first_by('team') }` | 行数 3、alice / dave / frank |
+
+### 8. DELETE
+
+| No. | 説明 | 入力 / 条件 | 期待結果 |
+|-----|------|------------|---------|
+| 97 | where にマッチした行を削除して残りを返す | `@base`、`DELETE`、`where { $_->{b} == 10 }` | 行数 3、a: bob, carol, eve |
+| 98 | 条件なしで全行削除する | `@base`、`DELETE` | 行数 0 |
+| 99 | 一致なしで全行残る | `@base`、`DELETE`、`where { $_->{b} > 999 }` | 行数 5 |
+| 100 | having と組み合わせて削除できる | `@base`、`DELETE`、`having { count_by('b') > 1 }` | 行数 1、a = 'carol' |
+| 101 | 元テーブルは変更されない | `@base` で DELETE 実行後 | `@base` の内容が変化しない |
+| 102 | `_idx` は出力に含まれない | `@base`、`DELETE`、`where { $_->{b} > 999 }` | 先頭行に `_idx` キーが存在しない |
+| 103 | as で count と affect が返る | `@base`、`as $td`、`DELETE`、`where { $_->{b} == 10 }` | `$td->{count}` = 3、`$td->{affect}` = 2 |
+| 104 | SELECT と同じ条件で対称動作する | `@base` に対して SELECT と DELETE を同じ where 条件で実行 | 両者の行数の合計が 5 |
