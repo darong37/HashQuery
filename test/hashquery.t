@@ -865,4 +865,14 @@ subtest 'delete: DSL ノードを返す' => sub {
     is_deeply $d, { delete => 1 };
 };
 
+subtest 'DELETE: SELECT と同時に指定するとdieする' => sub {
+    eval { query \@base, SELECT, DELETE };
+    like $@, qr/select and delete cannot be used together/;
+};
+
+subtest 'DELETE: except と同時に指定するとdieする' => sub {
+    eval { query \@base, SELECT { except => ['c'] }, DELETE };
+    like $@, qr/select and delete cannot be used together/;
+};
+
 done_testing;

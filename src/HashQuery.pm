@@ -28,7 +28,7 @@ sub query ($@) {
         unless ref $table eq 'ARRAY';
 
     my @all = _check_cols($table);
-    my ($as, $sel, $exc, $whr, $hvg);
+    my ($as, $sel, $exc, $whr, $hvg, $del);
 
     for my $dsl (@dsls) {
         die 'invalid DSL part'
@@ -49,10 +49,16 @@ sub query ($@) {
         elsif (exists $dsl->{having}) {
             $hvg = $dsl;
         }
+        elsif (exists $dsl->{delete}) {
+            $del = $dsl;
+        }
         else {
             die 'invalid DSL part';
         }
     }
+
+    die 'select and delete cannot be used together'
+        if ($sel || $exc) && $del;
 
     my $tbl = clone($table);
     my $cols;
