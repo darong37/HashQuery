@@ -219,6 +219,9 @@
 
 | No. | 説明 | 入力 / 条件 | 期待結果 |
 |-----|------|------------|---------|
+| 94 | DSL ノードを返す | `DELETE()` を呼び出す | `{ delete => 1 }` |
+| 95 | `SELECT` と同時に指定すると die する | `query \@base, SELECT, DELETE` | `"select and delete cannot be used together"` を含む die |
+| 96 | `except` と同時に指定すると die する | `query \@base, SELECT { except => ['c'] }, DELETE` | `"select and delete cannot be used together"` を含む die |
 | 97 | where にマッチした行を削除して残りを返す | `@base`、`DELETE`、`where { $_->{b} == 10 }` | 行数 3、a: bob, carol, eve |
 | 98 | 条件なしで全行削除する | `@base`、`DELETE` | 行数 0 |
 | 99 | 一致なしで全行残る | `@base`、`DELETE`、`where { $_->{b} > 999 }` | 行数 5 |
