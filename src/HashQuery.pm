@@ -61,11 +61,30 @@ sub query ($@) {
         if ($sel || $exc) && $del;
 
     my $tbl = clone($table);
-    my $cols;
 
     for my $i (0 .. $#$tbl) {
         $tbl->[$i]{_idx} = $i;
     }
+
+    if ($del) {
+        my $matched = $tbl;
+        $matched = _run_where($matched, $as, $whr) if $whr;
+        $matched = _run_having($matched, $as, $hvg) if $hvg;
+
+        my %del_idx = map { $_->{_idx} => 1 } @$matched;
+        my @remaining = grep { !$del_idx{ $_->{_idx} } } @$tbl;
+        my $result = _run_select(\@remaining, \@all);
+
+        if ($as) {
+            ${ $as->{alias} } = {
+                count  => scalar @$result,
+                affect => scalar @$matched,
+            };
+        }
+        return $result;
+    }
+
+    my $cols;
 
     if ($exc) {
         my %skip = map { $_ => 1 } @{ $exc->{except} };

@@ -875,4 +875,56 @@ subtest 'DELETE: except と同時に指定するとdieする' => sub {
     like $@, qr/select and delete cannot be used together/;
 };
 
+# ===========================================================================
+# DELETE — 実行
+# ===========================================================================
+
+subtest 'DELETE: where にマッチした行を削除して残りを返す' => sub {
+    my $r = query \@base, DELETE, where { $_->{b} == 10 };
+    is scalar @$r, 3;
+    my @a_vals = map { $_->{a} } @$r;
+    is_deeply [sort @a_vals], [qw/bob carol eve/];
+};
+
+subtest 'DELETE: 条件なしで全行削除する' => sub {
+    my $r = query \@base, DELETE;
+    is scalar @$r, 0;
+};
+
+subtest 'DELETE: 一致なしで全行残る' => sub {
+    my $r = query \@base, DELETE, where { $_->{b} > 999 };
+    is scalar @$r, 5;
+};
+
+subtest 'DELETE: having と組み合わせて削除できる' => sub {
+    my $r = query \@base, DELETE, having { count_by('b') > 1 };
+    is scalar @$r, 1;
+    is $r->[0]{a}, 'carol';
+};
+
+subtest 'DELETE: 元テーブルは変更されない' => sub {
+    my @orig = ({ a => 1, b => 2 }, { a => 3, b => 4 });
+    my @copy = map { +{ %$_ } } @orig;
+    query \@orig, DELETE, where { $_->{a} == 1 };
+    is_deeply \@orig, \@copy;
+};
+
+subtest 'DELETE: _idx は出力に含まれない' => sub {
+    my $r = query \@base, DELETE, where { $_->{b} > 999 };
+    ok !exists $r->[0]{_idx};
+};
+
+subtest 'DELETE: as で count と affect が返る' => sub {
+    our $td;
+    query \@base, as $td, DELETE, where { $_->{b} == 10 };
+    is $td->{count},  3;
+    is $td->{affect}, 2;
+};
+
+subtest 'DELETE: SELECT と同じ条件で対称動作する' => sub {
+    my $selected = query \@base, SELECT, where { $_->{b} == 10 };
+    my $deleted  = query \@base, DELETE, where { $_->{b} == 10 };
+    is scalar @$selected + scalar @$deleted, 5;
+};
+
 done_testing;
