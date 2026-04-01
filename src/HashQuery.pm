@@ -10,6 +10,7 @@ our @EXPORT = qw(
     query
     as
     select
+    delete
     where
     having
     count_by
@@ -121,6 +122,10 @@ sub where (&) {
 sub having (&) {
     my ($code) = @_;
     return { having => $code };
+}
+
+sub delete() {
+    return { delete => 1 };
 }
 
 sub count_by    { return HashQuery::HavingContext::count_by(@_) }
