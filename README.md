@@ -1,6 +1,8 @@
 # HashQuery
 
-Perl module for querying AOH (Array of Hash) data with SQL-like DSL syntax.
+Syntactic sugar for querying Perl AOH (Array of Hash) data with SQL-like DSL syntax. ([日本語版](README.ja.md)) The DSL closely mirrors SQL so that anyone familiar with SQL can read and write queries intuitively.
+
+`query` takes the target table as its first argument, which serves as both the `FROM` clause and the target for future UPDATE/DELETE operations — keeping the grammar consistent regardless of operation type. `where` filters rows individually; `having` filters based on aggregate conditions across the whole table, matching the SQL `WHERE` / `HAVING` distinction.
 
 ## Requirements
 
