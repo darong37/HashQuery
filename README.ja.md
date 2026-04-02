@@ -52,8 +52,11 @@ my $result = query $table,
 | `as` | `where` / `having` ブロック内で使うエイリアス変数を指定する |
 | `SELECT` | 出力列を指定する（行数は変わらない） |
 | `DELETE` | 削除モードを宣言する。`where` / `having` にマッチした行を削除し、残存行を返す |
+| `UPDATE` | 更新モードを宣言する。`where` / `having` にマッチした行の指定カラムを固定値で上書きし、全行を返す |
 | `where` | 条件ブロックで行をフィルターする |
 | `having` | `count_by` / `max_by` 等を使った集約フィルター |
+
+> `SELECT`、`DELETE`、`UPDATE` を大文字にしているのは Perl 組み込み演算子との衝突を避けるためです。
 
 **カラム値に対するメソッド（`$row->{col}`）:**
 

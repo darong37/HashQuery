@@ -220,13 +220,30 @@
 | No. | 説明 | 入力 / 条件 | 期待結果 |
 |-----|------|------------|---------|
 | 94 | DSL ノードを返す | `DELETE()` を呼び出す | `{ delete => 1 }` |
-| 95 | `SELECT` と同時に指定すると die する | `query \@base, SELECT, DELETE` | `"select and delete cannot be used together"` を含む die |
-| 96 | `except` と同時に指定すると die する | `query \@base, SELECT { except => ['c'] }, DELETE` | `"select and delete cannot be used together"` を含む die |
-| 97 | where にマッチした行を削除して残りを返す | `@base`、`DELETE`、`where { $_->{b} == 10 }` | 行数 3、a: bob, carol, eve |
-| 98 | 条件なしで全行削除する | `@base`、`DELETE` | 行数 0 |
-| 99 | 一致なしで全行残る | `@base`、`DELETE`、`where { $_->{b} > 999 }` | 行数 5 |
-| 100 | having と組み合わせて削除できる | `@base`、`DELETE`、`having { count_by('b') > 1 }` | 行数 1、a = 'carol' |
-| 101 | 元テーブルは変更されない | `@base` で DELETE 実行後 | `@base` の内容が変化しない |
-| 102 | `_idx` は出力に含まれない | `@base`、`DELETE`、`where { $_->{b} > 999 }` | 先頭行に `_idx` キーが存在しない |
-| 103 | as で count と affect が返る | `@base`、`as $td`、`DELETE`、`where { $_->{b} == 10 }` | `$td->{count}` = 3、`$td->{affect}` = 2 |
-| 104 | SELECT と同じ条件で対称動作する | `@base` に対して SELECT と DELETE を同じ where 条件で実行 | 両者の行数の合計が 5 |
+| 95 | `UPDATE` と同時に指定すると die する | `query \@base, DELETE, UPDATE { b => 0 }` | `"DELETE and UPDATE cannot be used together"` を含む die |
+| 96 | where にマッチした行を削除して残りを返す | `@base`、`DELETE`、`where { $_->{b} == 10 }` | 行数 3、a: bob, carol, eve |
+| 97 | 条件なしで全行削除する | `@base`、`DELETE` | 行数 0 |
+| 98 | 一致なしで全行残る | `@base`、`DELETE`、`where { $_->{b} > 999 }` | 行数 5 |
+| 99 | having と組み合わせて削除できる | `@base`、`DELETE`、`having { count_by('b') > 1 }` | 行数 1、a = 'carol' |
+| 100 | 元テーブルは変更されない | `@base` で DELETE 実行後 | `@base` の内容が変化しない |
+| 101 | `_idx` は出力に含まれない | `@base`、`DELETE`、`where { $_->{b} > 999 }` | 先頭行に `_idx` キーが存在しない |
+| 102 | as で count と affect が返る | `@base`、`as $td`、`DELETE`、`where { $_->{b} == 10 }` | `$td->{count}` = 3、`$td->{affect}` = 2 |
+| 103 | SELECT と同じ条件で対称動作する | `@base` に対して SELECT と DELETE を同じ where 条件で実行 | 両者の行数の合計が 5 |
+
+### 9. UPDATE
+
+| No. | 説明 | 入力 / 条件 | 期待結果 |
+|-----|------|------------|---------|
+| 104 | DSL ノードを返す | `UPDATE { score => 100 }` | `{ update => { score => 100 } }` |
+| 105 | 複数カラム指定の DSL ノードを返す | `UPDATE { score => 100, grade => 'A' }` | `{ update => { score => 100, grade => 'A' } }` |
+| 106 | ハッシュリファレンス以外は die する | `UPDATE('invalid')` | `"UPDATE requires a hash reference"` を含む die |
+| 107 | `DELETE` と同時に指定すると die する | `query \@base, DELETE, UPDATE { b => 0 }` | `"DELETE and UPDATE cannot be used together"` を含む die |
+| 108 | where にマッチした行を更新して全行返す | `@base`、`UPDATE { b => 99 }`、`where { $_->{b} == 10 }` | 全5行返る。alice・dave の b が 99 |
+| 109 | 条件なしで全行更新する | `@base`、`UPDATE { b => 0 }` | 全5行の b が 0 |
+| 110 | 一致なしで全行そのまま返す | `@base`、`UPDATE { b => 0 }`、`where { $_->{b} > 999 }` | 全5行 b が元の値のまま |
+| 111 | having と組み合わせて更新できる | `@base`、`UPDATE { b => 0 }`、`having { count_by('b') > 1 }` | b==0 が4行、carol のみ元の値 |
+| 112 | 複数カラムを同時に更新できる | `@base`、`UPDATE { b => 0, c => 0 }`、`where { $_->{a} eq 'alice' }` | alice の b・c が 0 |
+| 113 | 元テーブルは変更されない | UPDATE 実行後に元配列を確認 | 元配列の内容が変化しない |
+| 114 | `_idx` は出力に含まれない | `@base`、`UPDATE { b => 0 }`、`where { $_->{b} > 999 }` | 先頭行に `_idx` キーが存在しない |
+| 115 | as で count と affect が返る | `@base`、`as $tu`、`UPDATE { b => 0 }`、`where { $_->{b} == 10 }` | `$tu->{count}` = 5、`$tu->{affect}` = 2 |
+| 116 | 存在しないカラムを指定すると die する | `query \@base, UPDATE { nonexistent => 1 }` | `"unknown column in UPDATE: nonexistent"` を含む die |

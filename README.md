@@ -52,8 +52,11 @@ See [docs/spec.md](docs/spec.md) for the full API reference.
 | `as` | Binds an alias variable for use in `where` / `having` blocks |
 | `SELECT` | Column projection (does not change row count) |
 | `DELETE` | Declares delete mode; rows matching `where` / `having` are removed, remaining rows returned |
+| `UPDATE` | Declares update mode; rows matching `where` / `having` have their specified columns overwritten with fixed values, all rows returned |
 | `where` | Row filter with a condition block |
 | `having` | Aggregate filter; uses `count_by`, `max_by`, etc. |
+
+> `SELECT`, `DELETE`, `UPDATE` are uppercase to avoid conflicts with Perl built-in operators.
 
 **Methods on column values (`$row->{col}`):**
 

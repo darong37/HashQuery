@@ -941,4 +941,70 @@ subtest 'UPDATE: ハッシュリファレンス以外はdieする' => sub {
     like $@, qr/UPDATE requires a hash reference/;
 };
 
+# ===========================================================================
+# UPDATE — 実行
+# ===========================================================================
+
+subtest 'UPDATE: where にマッチした行を更新して全行返す' => sub {
+    my $r = query \@base, UPDATE { b => 99 }, where { $_->{b} == 10 };
+    is scalar @$r, 5;
+    my @updated = grep { $_->{b} == 99 } @$r;
+    my @a_vals  = sort map { $_->{a} } @updated;
+    is_deeply \@a_vals, [qw/alice dave/];
+};
+
+subtest 'UPDATE: 条件なしで全行更新する' => sub {
+    my $r = query \@base, UPDATE { b => 0 };
+    is scalar @$r, 5;
+    my @vals = map { $_->{b} } @$r;
+    is_deeply \@vals, [0, 0, 0, 0, 0];
+};
+
+subtest 'UPDATE: 一致なしで全行そのまま返す' => sub {
+    my $r = query \@base, UPDATE { b => 0 }, where { $_->{b} > 999 };
+    is scalar @$r, 5;
+    my @vals = map { $_->{b} } @$r;
+    is_deeply \@vals, [10, 20, 30, 10, 20];
+};
+
+subtest 'UPDATE: having と組み合わせて更新できる' => sub {
+    my $r = query \@base, UPDATE { b => 0 }, having { count_by('b') > 1 };
+    my @zeroed = grep { $_->{b} == 0 } @$r;
+    is scalar @zeroed, 4;
+    my @intact = grep { $_->{b} != 0 } @$r;
+    is scalar @intact, 1;
+    is $intact[0]{a}, 'carol';
+};
+
+subtest 'UPDATE: 複数カラムを同時に更新できる' => sub {
+    my $r = query \@base, UPDATE { b => 0, c => 0 }, where { $_->{a} eq 'alice' };
+    my $alice = (grep { $_->{a} eq 'alice' } @$r)[0];
+    is $alice->{b}, 0;
+    is $alice->{c}, 0;
+};
+
+subtest 'UPDATE: 元テーブルは変更されない' => sub {
+    my @orig = ({ a => 1, b => 2 }, { a => 3, b => 4 });
+    my @copy = map { +{ %$_ } } @orig;
+    query \@orig, UPDATE { b => 99 }, where { $_->{a} == 1 };
+    is_deeply \@orig, \@copy;
+};
+
+subtest 'UPDATE: _idx は出力に含まれない' => sub {
+    my $r = query \@base, UPDATE { b => 0 }, where { $_->{b} > 999 };
+    ok !exists $r->[0]{_idx};
+};
+
+subtest 'UPDATE: as で count と affect が返る' => sub {
+    our $tu;
+    query \@base, as $tu, UPDATE { b => 0 }, where { $_->{b} == 10 };
+    is $tu->{count},  5;
+    is $tu->{affect}, 2;
+};
+
+subtest 'UPDATE: 存在しないカラムを指定するとdieする' => sub {
+    eval { query \@base, UPDATE { nonexistent => 1 } };
+    like $@, qr/unknown column in UPDATE: nonexistent/;
+};
+
 done_testing;
