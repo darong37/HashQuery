@@ -2,7 +2,7 @@
 
 Perl の AOH（Array of Hash）を SQL に似た DSL 構文で操作するためのシンタックスシュガーです。DSL の構文は SQL をできるだけ忠実に模倣しており、SQL の知識がある開発者がそのまま直感的に読み書きできることを目指しています。
 
-`query` の第一引数が対象テーブルを指定します。これは SQL の `FROM` 句の役割を果たすと同時に、将来の UPDATE・DELETE 操作においても対象テーブルの指定方法を統一するための設計です。`where` は行単位のフィルター、`having` はテーブル全体を見た集約フィルターであり、SQL の `WHERE` / `HAVING` の概念をそのまま Perl の構文として表現しています。
+`HashQuery->new(\@table)` でインスタンスを生成し、`SELECT` / `DELETE` / `UPDATE` をメソッドとして呼び出します。`where` は行単位のフィルター、`having` はテーブル全体を見た集約フィルターであり、SQL の `WHERE` / `HAVING` の概念をそのまま Perl の構文として表現しています。
 
 ## 要件
 
@@ -33,30 +33,43 @@ my $table = [
 ];
 
 our $row;
-my $result = query $table,
-    as   $row,
-    SELECT [qw/name score/],
+my $hq = HashQuery->new(\@table, as $row);
+
+my $result = $hq->SELECT(
+    [qw/name score/],
     where  { $row->{score} >= 80 },
-    having { count_by('grade') > 1 };
+    having { count_by('grade') > 1 },
+);
 ```
 
 詳細な API リファレンスは [docs/spec.md](docs/spec.md) を参照してください。
 
 ## 主な機能
 
-**コア関数:**
+**コンストラクタ:**
+
+```perl
+my $hq = HashQuery->new(\@table);
+my $hq = HashQuery->new(\@table, as $tbl);
+```
+
+**インスタンスメソッド:**
+
+| メソッド | 役割 |
+|---|---|
+| `SELECT('*', ...)` | 出力列を指定する。`where` / `having` にマッチした行を返す |
+| `DELETE(...)` | `where` / `having` にマッチした行を削除し、残存行を返す |
+| `UPDATE(\%set, ...)` | `where` / `having` にマッチした行の指定カラムを上書きし、全行を返す |
+
+**DSL ヘルパー関数:**
 
 | 関数 | 役割 |
 |---|---|
-| `query` | 唯一の実行関数。AOH テーブルと DSL 部品を受け取り AOH を返す |
-| `as` | `where` / `having` ブロック内で使うエイリアス変数を指定する |
-| `SELECT` | 出力列を指定する（行数は変わらない） |
-| `DELETE` | 削除モードを宣言する。`where` / `having` にマッチした行を削除し、残存行を返す |
-| `UPDATE` | 更新モードを宣言する。`where` / `having` にマッチした行の指定カラムを固定値で上書きし、全行を返す |
+| `as` | `where` / `having` ブロック内で使うエイリアス変数を指定する（`new` に渡す） |
+| `except` | `SELECT` の第一引数として除外カラムを指定する |
+| `set` | `UPDATE` の第一引数として key/value リストをハッシュリファレンスに変換する syntax sugar |
 | `where` | 条件ブロックで行をフィルターする |
 | `having` | `count_by` / `max_by` 等を使った集約フィルター |
-
-> `SELECT`、`DELETE`、`UPDATE` を大文字にしているのは Perl 組み込み演算子との衝突を避けるためです。
 
 **カラム値に対するメソッド（`$row->{col}`）:**
 
@@ -102,9 +115,9 @@ perl test/hashquery.t
 出力例:
 
 ```
-1..104
-ok 1 - query: DSLなしで全行全列を返す
-ok 2 - query: 空テーブルを渡すと空配列を返す
+1..60
+ok 1 - as: { as => \$var } を返す
+ok 2 - except: { except => [...] } を返す
 ...
-ok 104 - DELETE: SELECT と同じ条件で対称動作する
+ok 60 - 実用: スコア75以上かつチームに2人以上いるメンバーを取得
 ```

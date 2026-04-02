@@ -4,15 +4,13 @@
 
 HashQuery は、Perl の AOH（Array of Hash）をテーブルとして扱い、SQL に似た構文で操作するためのシンタックスシュガーである。DSL の構文は SQL をできるだけ忠実に模倣しており、SQL の知識がある開発者がそのまま直感的に読み書きできることを目指している。
 
-`from` を持たない理由は、JOIN を前提としない単一テーブル操作においては対象テーブルを `query` の第一引数として固定することで `from` の役割を代替できるからである。また将来 UPDATE・DELETE に対応する場合、SQL では `SELECT`・`DELETE` には `FROM` があるが `UPDATE` にはないというアンバランスな文法になる。第一引数でテーブルを統一指定する設計にすることで、操作の種類によらず文法を一貫させることができる。
+オブジェクト指向 API として設計されており、`HashQuery->new(\@table)` でインスタンスを生成し、`SELECT` / `DELETE` / `UPDATE` をメソッドとして呼び出す。インスタンスは内部に clone した AOH を保持するため、同一インスタンスに対して複数回メソッドを呼び出しても互いに影響しない。
 
 `where` と `having` の役割は明確に分離している。`where` は行単位のフィルター条件であり、現在行のみを見て評価する。`having` はテーブル全体を見た集約フィルターであり、重複排除・最大値・先頭行といった「全体の中での位置づけ」を条件にできる。この2つを分離することで、SQL の `WHERE` / `HAVING` の概念をそのまま Perl の構文として表現している。
 
-- 実行できるのは **`query` のみ**
-- `SELECT` / `DELETE` / `UPDATE` / `as` / `where` / `having` は **`query` に渡す DSL ノード値**を返す関数であり、自身は何も実行しない
-- DSL 部品の戻り値はすべて**深さ1のハッシュリファレンス**とする
-- 各 DSL 部品は**括弧なし**で記述することを前提とする（プロトタイプで実現）
-- `SELECT` の引数は配列そのものではなく**配列リファレンス**で渡す
+- 実行の起点は **`HashQuery->new`** によるインスタンス生成
+- `SELECT` / `DELETE` / `UPDATE` は **インスタンスメソッド**
+- `as` / `except` / `set` / `where` / `having` は **引数として渡す DSL ノード値**を返す関数
 - 入出力はすべて **AOH（Array of Hash）**
 - 外部エンジン・別実行層は存在しない
 - `from` / `group_by` / `distinct` は存在しない
@@ -21,11 +19,9 @@ HashQuery は、Perl の AOH（Array of Hash）をテーブルとして扱い、
 
 | 関数 | 分類 | 役割 |
 |---|---|---|
-| `query` | 実行関数 | 唯一の実行関数。AOH を受け取り DSL を解釈して AOH を返す |
-| `as` | DSL | `where` / `having` 内で使うエイリアス変数を指定する |
-| `SELECT` | DSL | 出力列を指定する（行数は変えない） |
-| `DELETE` | DSL | 削除モードを宣言する（`where` / `having` と組み合わせて使う） |
-| `UPDATE` | DSL | 更新内容を指定する（ハッシュリファレンスでカラム名と値を渡す） |
+| `as` | DSL | `new` のオプションとして `where` / `having` 内で使うエイリアス変数を指定する |
+| `except` | DSL | `SELECT` の第一引数として除外するカラムを指定する |
+| `set` | DSL | `UPDATE` の第一引数として更新内容を key/value リストで記述するための syntax sugar |
 | `where` | DSL | 行フィルタ条件を指定する |
 | `having` | DSL | 集約フィルタ条件を指定する |
 
@@ -34,11 +30,9 @@ HashQuery は、Perl の AOH（Array of Hash）をテーブルとして扱い、
 **プロトタイプ定義:**
 
 ```perl
-sub query ($@);
 sub as (\$);
-sub SELECT (;$);
-sub DELETE ();
-sub UPDATE ($);
+sub except (@);
+sub set (@);
 sub where (&);
 sub having (&);
 ```
@@ -46,59 +40,120 @@ sub having (&);
 **基本構文:**
 
 ```perl
-query
-    $table,
-    as $tbl,
-    SELECT [qw/a b c/],
-    where  { ... },
-    having { ... };
+my $hq = HashQuery->new(\@table, as $tbl);
+
+my $result = $hq->SELECT([qw/a b c/], where { ... }, having { ... });
+my $result = $hq->DELETE(where { ... });
+my $result = $hq->UPDATE({ col => val }, where { ... });
 ```
 
-- `as` は Table の直後に置く（意味的に Table に対する指定のため）
-- DSL の記述順序と実行順序は独立している
+## 3. コンストラクタ・メソッドリファレンス
 
-## 3. 各関数リファレンス
-
-### query
+### HashQuery->new
 
 **シグネチャ:**
 
 ```perl
-query $table, DSL部品...;
+my $hq = HashQuery->new(\@table);
+my $hq = HashQuery->new(\@table, as $tbl);
+my $hq = HashQuery->new(\@table, { as => \$tbl });
 ```
 
 **動作説明:**
 
-第一引数に Table（AOH）を受け取り、後続の DSL 部品を解釈して実行する。戻り値は AOH。Table の全行は同一のカラム構成を持つ必要がある（列名・列数が一致しない場合は die する）。実行時に各行へ内部カラム `_idx`（0 始まりの行番号）を自動付加する。`_idx` は `where` / `having` の評価中に `$tbl->{_idx}` として参照可能。最終出力には含まれない。
+第一引数に AOH（必須）を受け取りインスタンスを生成する。`_check_cols` を実行して全カラムリストを保持する。元の AOH は `clone` してインスタンス内部に保持するため、元のデータは変更されない。第二引数にオプションのハッシュリファレンスを渡すことができ、現時点では `as` のみをサポートする。`as $tbl` は `{ as => \$tbl }` の syntax sugar。
 
-**コード例:**
+**エラー:**
 
-```perl
-my $tbl;
-my $result = query $table, as $tbl, where { $tbl->{b} > 10 };
-my $cnt    = scalar @$result;
-```
+| 状況 | エラーメッセージ |
+|---|---|
+| 第一引数が AOH でない | `"HashQuery->new requires an Array of Hash"` |
+| テーブルのカラム構成が不一致 | `"table columns are not consistent"` |
 
-### as
+### SELECT メソッド
 
 **シグネチャ:**
 
 ```perl
-my $tbl;
-as $tbl;
+$hq->SELECT('*')
+$hq->SELECT('*', where { ... }, having { ... })
+$hq->SELECT([qw/a b/], where { ... })
+$hq->SELECT(except('c', 'd'), where { ... })
+```
+
+**動作説明:**
+
+第一引数（必須）で出力カラムを指定する。`'*'` は全列、配列リファレンスは明示指定、`except(...)` の戻り値は除外指定。`undef` は die する。第二引数以降に `where { }` / `having { }` を順不同で渡せる。戻り値は AOH（条件にマッチした行を指定列で射影したもの）。`_idx` は常に出力から除外される。
+
+`as` を指定した場合、完了後に `$tbl->{count}` = 結果行数、`$tbl->{affect}` = 結果行数（SELECT では同値）。
+
+**エラー:**
+
+| 状況 | エラーメッセージ |
+|---|---|
+| 第一引数が不正 | `"SELECT requires '*', arrayref, or except(...)"` |
+
+### DELETE メソッド
+
+**シグネチャ:**
+
+```perl
+$hq->DELETE()
+$hq->DELETE(where { ... })
+$hq->DELETE(having { ... })
+$hq->DELETE(where { ... }, having { ... })
+```
+
+**動作説明:**
+
+引数（省略可）に `where { }` / `having { }` を順不同で渡せる。`where` / `having` にマッチした行を削除対象とし、残存行を AOH で返す。引数省略時は何も削除されず全行を返す。元のテーブルは変更しない。`SELECT` と対称的な操作であり、同じ条件で `SELECT` ↔ `DELETE` を差し替えることで削除対象の確認と実行を切り替えられる。
+
+`as` を指定した場合、完了後に `$tbl->{count}` = 残存行数、`$tbl->{affect}` = 削除行数。
+
+### UPDATE メソッド
+
+**シグネチャ:**
+
+```perl
+$hq->UPDATE({ col => val, ... })
+$hq->UPDATE({ col => val, ... }, where { ... })
+$hq->UPDATE(set(col => val, ...), where { ... })
+```
+
+**動作説明:**
+
+第一引数（必須）に更新内容のハッシュリファレンスまたは `set(...)` の戻り値を渡す。`where` / `having` にマッチした行の指定カラムを固定値で上書きし、全行（更新済み行・未更新行を含む）を AOH で返す。元のテーブルは変更しない。存在しないカラムを指定した場合は die する。
+
+`as` を指定した場合、完了後に `$tbl->{count}` = 全行数、`$tbl->{affect}` = 更新行数。
+
+**エラー:**
+
+| 状況 | エラーメッセージ |
+|---|---|
+| 第一引数がハッシュリファレンスでない | `"UPDATE requires a hash reference"` |
+| 存在しないカラム名を指定 | `"unknown column in UPDATE: <カラム名>"` |
+
+### as 関数
+
+**シグネチャ:**
+
+```perl
+as $var
 ```
 
 **戻り値:**
 
 ```perl
-{ alias => \$var }
+{ as => \$var }
 ```
 
 **動作説明:**
 
-`where` / `having` 内で現在行を参照するためのエイリアス変数を指定する。`as $tbl` と指定した場合、`where` / `having` の中で `$tbl->{col}` によって現在行のカラム値を参照できる。`as` を指定しない場合は `$_` で参照する。`as` を指定した場合も `$_` は同じ値を持つ。引数はスカラー変数への参照（`\$var` 形式）として受け取る。クエリ完了後、指定した変数にはハッシュリファレンス `{ count => N, affect => M }` が格納される。
+`new` の第二引数として渡すことで、`where` / `having` 内で現在行を参照するためのエイリアス変数を指定する。`as $tbl` と指定した場合、`where` / `having` の中で `$tbl->{col}` によって現在行のカラム値を参照できる。`as` を指定しない場合は `$_` で参照する。`as` を指定した場合も `$_` は同じ値を持つ。引数はスカラー変数への参照（`\$var` 形式）として受け取る。
 
-| 操作 | `count` | `affect` |
+各メソッド完了後、指定した変数にはハッシュリファレンスが格納される:
+
+| メソッド | `count` | `affect` |
 |---|---|---|
 | `SELECT` | 結果行数 | 結果行数（count と同値） |
 | `DELETE` | 残存行数 | 削除行数 |
@@ -108,98 +163,53 @@ as $tbl;
 
 ```perl
 our $tbl;
-my $result = query $table, as $tbl, where { $tbl->{score} >= 80 };
-# クエリ完了後 $tbl->{count} には結果行数、$tbl->{affect} には変化行数が格納される
+my $hq = HashQuery->new(\@table, as $tbl);
+my $r = $hq->SELECT('*', where { $tbl->{score} >= 80 });
+# $tbl->{count} には結果行数、$tbl->{affect} には変化行数が格納される
 ```
 
-### SELECT
+### except 関数
 
 **シグネチャ:**
 
 ```perl
-SELECT [qw/a b c/];          # 明示指定
-SELECT { except => ['c'] };   # 除外指定
-SELECT '*';                   # 全列
-SELECT;                       # 全列（'*' と同義）
+except('c')
+except('b', 'c')
 ```
 
 **戻り値:**
 
 ```perl
-{ select => [qw/a b c/] }   # 明示指定
-{ except => ['c'] }          # 除外指定
+{ except => ['c'] }
 ```
 
 **動作説明:**
 
-出力に含めるカラムを指定する。行数は変えない。引数なし・`'*'` はともに全列指定で、実際の列は `query` が Table を基準に確定する。`except` を指定した場合は全列からその列を除外した結果を出力カラムとする。内部カラム `_idx` は常に出力から除外される。
+`SELECT` の第一引数として渡すことで、インスタンスが保持する全カラムリストから指定列を除外した列リストで射影する。引数は1個以上のカラム名を渡す。
 
-**コード例:**
+**エラー:**
 
-```perl
-query $table, SELECT [qw/a b/];
-query $table, SELECT { except => ['c'] };
-query $table, SELECT '*';
-query $table, SELECT;
-```
+| 状況 | エラーメッセージ |
+|---|---|
+| 引数が0個 | `"except requires at least one column name"` |
 
-### DELETE
+### set 関数
 
 **シグネチャ:**
 
 ```perl
-DELETE;
+set(score => 60, grade => 'C')
 ```
 
 **戻り値:**
 
-```perl
-{ delete => 1 }
-```
+ハッシュリファレンス（`{ score => 60, grade => 'C' }`）
 
 **動作説明:**
 
-`query` に渡すことで削除モードを宣言する。`where` / `having` にマッチした行を削除対象とし、残存行を AOH で返す。元のテーブルは変更しない。`UPDATE` と同時に指定した場合は die する。`SELECT` と対称的な操作であり、同じ条件で `SELECT` ↔ `DELETE` を差し替えることで削除対象の確認と実行を切り替えられる。
+`UPDATE` の第一引数として渡す更新内容を key/value リストで記述するための syntax sugar。`{ col => val }` と完全に同義。波括弧なしで UPDATE の更新内容を記述できる。
 
-**コード例:**
-
-```perl
-# SELECT で確認
-my $preview = query $table, SELECT, where { $_->{b} > 10 };
-
-# DELETE に差し替えて実行
-my $result = query $table, DELETE, where { $_->{b} > 10 };
-```
-
-### UPDATE
-
-**シグネチャ:**
-
-```perl
-UPDATE { col => val, ... };
-```
-
-**戻り値:**
-
-```perl
-{ update => { col => val, ... } }
-```
-
-**動作説明:**
-
-`query` に渡すことで更新モードを宣言する。`where` / `having` にマッチした行の指定カラムを固定値で上書きし、全行（更新済み行・未更新行を含む）を AOH で返す。元のテーブルは変更しない。`DELETE` と同時に指定した場合は die する。存在しないカラム名を指定した場合は die する。動的な計算値はサポートせず、固定値のみ指定できる。
-
-**コード例:**
-
-```perl
-# SELECT で更新対象を確認
-my $preview = query $table, SELECT, where { $_->{score} < 60 };
-
-# UPDATE に差し替えて実行
-my $result = query $table, UPDATE { score => 60, grade => 'C' }, where { $_->{score} < 60 };
-```
-
-### where
+### where 関数
 
 **シグネチャ:**
 
@@ -217,18 +227,7 @@ where { 条件式 };
 
 Table を1行ずつ評価し、条件式が真の行のみを残す。`as` が指定されている場合はそのエイリアス変数が現在行を指す。`as` なしの場合は `$_` で参照する。`$tbl->{col}` や `$_->{col}` が返す値は `HashQuery::Value` のインスタンスであり、`like` / `between` / `in` などの条件メソッドを呼び出せる。
 
-**コード例:**
-
-```perl
-# $_ を使う場合
-query $table, where { $_->{score} >= 80 };
-
-# as でエイリアスを使う場合
-our $tbl;
-query $table, as $tbl, where { $tbl->{score} >= 80 };
-```
-
-### having
+### having 関数
 
 **シグネチャ:**
 
@@ -244,16 +243,7 @@ having { 条件式 };
 
 **動作説明:**
 
-`where` 後の Table を対象に行単位で条件を評価し、真の行のみを残す。`as` が指定されている場合はそのエイリアス変数が現在行を指す。集約関数（`count_by` / `max_by` / `min_by` / `first_by` / `last_by`）を条件式内で使用できる。集約対象は常に `where` 後の Table であり、入力直後の Table ではない。集約関数の前計算は `having` 評価前に一度だけ行われる。
-
-**コード例:**
-
-```perl
-our $tbl;
-query $table,
-    as $tbl,
-    having { count_by('grade') > 1 };
-```
+`where` 後の Table を対象に行単位で条件を評価し、真の行のみを残す。`as` が指定されている場合はそのエイリアス変数が現在行を指す。集約関数（`count_by` / `max_by` / `min_by` / `first_by` / `last_by`）を条件式内で使用できる。集約対象は常に `where` 後の Table であり、元の Table ではない。
 
 ## 4. 条件メソッド（where / having 共通）
 
@@ -269,10 +259,6 @@ $tbl->{col}->like($pattern)
 - 戻り値: 真偽値（一致すれば 1、しなければ 0）
 - `undef` の場合は 0 を返す
 
-```perl
-where { $tbl->{name}->like('ab%') }
-```
-
 ### not_like
 
 ```perl
@@ -281,10 +267,6 @@ $tbl->{col}->not_like($pattern)
 
 - `like` と同じ規則で評価した結果を反転して返す
 - `undef` の場合、`like` が 0 のため `not_like` は 1 を返す
-
-```perl
-where { $tbl->{name}->not_like('%error%') }
-```
 
 ### between
 
@@ -295,11 +277,6 @@ $tbl->{col}->between($min, $max)
 - `$min` / `$max`: 数値または文字列スカラー。末尾に `!` を付けると排他境界
 - 戻り値: 真偽値（範囲内であれば 1）
 - `undef` の場合は 0 を返す
-
-```perl
-where { $tbl->{score}->between(10, 20) }    # 10以上20以下
-where { $tbl->{score}->between(10, '20!') } # 10以上20未満
-```
 
 ### in
 
@@ -312,10 +289,6 @@ $tbl->{col}->in($v1, $v2, ...)
 - 戻り値: 真偽値（候補集合に含まれれば 1）
 - `undef` の場合は 0 を返す
 
-```perl
-where { $tbl->{kind}->in([ 'x', 'y' ]) }
-```
-
 ### not_in
 
 ```perl
@@ -326,10 +299,6 @@ $tbl->{col}->not_in($v1, $v2, ...)
 - `in` と同じ引数形式を受け付ける
 - `in` の評価結果を反転して返す
 
-```perl
-where { $tbl->{kind}->not_in([ 'x', 'y' ]) }
-```
-
 ### asNull
 
 ```perl
@@ -339,11 +308,6 @@ $tbl->{col}->asNull($default)
 - `$default`: 置き換え後のデフォルト値（スカラー値）
 - 対象値が `undef` または空文字の場合は `$default` を返す
 - 対象値が存在する場合は対象値そのものを返す
-- 真偽値関数ではなく変換・加工関数として扱う
-
-```perl
-where { $tbl->{name}->asNull('N/A') ne 'N/A' }
-```
 
 ## 5. where 専用関数
 
@@ -360,12 +324,12 @@ grep_concat($col, $pattern, $start, $end)
 
 **動作説明:**
 
-現在行の `$col` カラム値が `$pattern` に一致した場合に、`$start` 〜 `$end` の範囲の行の `$col` カラム値を改行区切りで連結した文字列を返す。一致しない場合、または `$col` の値が `undef` / 空文字の場合は空文字を返す。連結する値は `$col` カラムのみであり、他カラムの値は含まれない。`$start` 〜 `$end` の範囲はテーブルの境界でクランプする。`where` ブロック外で呼び出した場合は die する。エクスポートされた独立関数として提供し、チェーンメソッドではない。`HashQuery::WhereContext` に保持されたコンテキストを参照して動作する。
+現在行の `$col` カラム値が `$pattern` に一致した場合に、`$start` 〜 `$end` の範囲の行の `$col` カラム値を改行区切りで連結した文字列を返す。一致しない場合、または `$col` の値が `undef` / 空文字の場合は空文字を返す。連結する値は `$col` カラムのみであり、他カラムの値は含まれない。`$start` 〜 `$end` の範囲はテーブルの境界でクランプする。`where` ブロック外で呼び出した場合は die する。
 
 **コード例:**
 
 ```perl
-# msg カラムに ERROR を含む行とその前後1行の msg 値を連結して取得
+# msg カラムに ERROR を含む行の前後1行を連結した文字列を確認
 where { grep_concat('msg', qr/ERROR/, -1, 1) ne '' }
 ```
 
@@ -382,10 +346,6 @@ count_by($col1, $col2, ...)
 - 入力: グループキーとなる1個以上のカラム名（文字列リスト）
 - 戻り値: 現在行と同じグループキーを持つレコード数（整数）
 
-```perl
-having { count_by(qw/a b/) > 1 }
-```
-
 ### max_by
 
 ```perl
@@ -395,11 +355,6 @@ max_by($target, $col1, $col2, ...)
 - `$target`: 最大値を求める対象カラム名（第一引数）
 - `$col1, ...`: グループキー（第二引数以降）
 - 戻り値: グループ内の `$target` の最大値。有効値がなければ `undef`
-- 比較は数値演算子（`>`）で行う。文字列型カラムには使用しないこと
-
-```perl
-having { max_by('c', qw/a b/) > 100 }
-```
 
 ### min_by
 
@@ -408,12 +363,6 @@ min_by($target, $col1, $col2, ...)
 ```
 
 - `max_by` と同様の引数形式で最小値を返す
-- グループ内に有効値が存在しない場合は `undef`
-- 比較は数値演算子（`<`）で行う
-
-```perl
-having { min_by('c', qw/a b/) >= 0 }
-```
 
 ### first_by
 
@@ -424,10 +373,6 @@ first_by($col1, $col2, ...)
 - 入力: グループキーとなるカラム名（1個以上）
 - 戻り値: 現在行がグループ内の先頭行であれば 1、そうでなければ 0
 
-```perl
-having { first_by(qw/a b/) }
-```
-
 ### last_by
 
 ```perl
@@ -437,68 +382,62 @@ last_by($col1, $col2, ...)
 - 入力: グループキーとなるカラム名（1個以上）
 - 戻り値: 現在行がグループ内の末尾行であれば 1、そうでなければ 0
 
-```perl
-having { last_by(qw/a b/) }
-```
-
 ## 7. 実行モデル
 
-### SELECT モード
+### SELECT メソッド
 
-`query` の実行は以下の順序で行われる。DSL の記述順序には依存しない。
-
-1. `as` 解釈（エイリアス変数の確定）
-2. `SELECT` / `except` 解釈（出力カラムの確定）
-3. 各行への `_idx` 付加（0 始まりの行番号）
-4. `where` 評価（行フィルタ）
-5. `having` 前計算（集約マップのキャッシュ生成）
+1. `SELECT` 引数から出力カラムリストを確定する
+2. DSL パーツ（`where` / `having`）を解釈する
+3. インスタンス内部テーブルを `clone` する
+4. 各行への `_idx` 付加（0 始まりの行番号）
+5. `where` 評価（行フィルタ）
 6. `having` 評価（集約フィルタ）
-7. `SELECT` 列射影（`_idx` を除外して AOH 返却）
+7. 列射影（`_idx` を除外して AOH 返却）
 8. `as` 変数に `{ count => N, affect => N }` を格納
 
-### DELETE モード
+### DELETE メソッド
 
-1. `as` 解釈（エイリアス変数の確定）
-2. 各行への `_idx` 付加（0 始まりの行番号）
-3. `where` 評価（削除候補を特定）
-4. `having` 前計算 → 評価（削除候補をさらに絞り込み）
+1. DSL パーツを解釈する
+2. インスタンス内部テーブルを `clone` する
+3. 各行への `_idx` 付加（0 始まりの行番号）
+4. `where` / `having` 評価（削除候補を特定）
 5. 削除対象行を除いた残存行を AOH として返す（`_idx` を除外）
 6. `as` 変数に `{ count => 残存行数, affect => 削除行数 }` を格納
 
-### UPDATE モード
+条件なし（引数省略）の場合はステップ 4 をスキップし、全行を返す（何も削除しない）。
 
-1. 各行への `_idx` 付加（0 始まりの行番号）
-2. `UPDATE` ハッシュのカラム名が全て既存カラムであることを検証（不正なら die）
-3. `where` 評価（更新候補を特定）
-4. `having` 前計算 → 評価（更新候補をさらに絞り込み）
-5. 更新候補の各行に対して `UPDATE` ハッシュの値を代入
-6. 全行（更新済み行・未更新行を含む）を AOH として返す（`_idx` を除外）
-7. `as` 変数に `{ count => 全行数, affect => 更新行数 }` を格納
+### UPDATE メソッド
+
+1. 更新内容のカラム名が全て既存カラムであることを検証（不正なら die）
+2. DSL パーツを解釈する
+3. インスタンス内部テーブルを `clone` する
+4. 各行への `_idx` 付加（0 始まりの行番号）
+5. `where` / `having` 評価（更新候補を特定）
+6. 更新候補の各行に対して更新内容を代入
+7. 全行（更新済み行・未更新行を含む）を AOH として返す（`_idx` を除外）
+8. `as` 変数に `{ count => 全行数, affect => 更新行数 }` を格納
 
 ### 内部パッケージ
 
 | パッケージ | 役割 |
 |---|---|
-| `HashQuery` | 実行主体本体 |
-| `HashQuery::RowHash` | `$tbl` / `$_` の実体。`tie` によるハッシュアクセスを提供し、カラム添字で `HashQuery::Value` を返す。内部に現在行・テーブル全体・行インデックスを保持する |
+| `HashQuery` | インスタンス主体。`new`・`SELECT`・`DELETE`・`UPDATE` を提供する |
+| `HashQuery::RowHash` | `$tbl` / `$_` の実体。`tie` によるハッシュアクセスを提供し、カラム添字で `HashQuery::Value` を返す |
 | `HashQuery::Value` | カラム値を保持する値オブジェクト。条件メソッド・変換メソッドおよび数値/文字列/真偽値オーバーロードを持つ |
 | `HashQuery::WhereContext` | `where` 実行時の現在行と対象 Table を保持し、`grep_concat` に実行コンテキストを提供する |
 | `HashQuery::HavingContext` | `having` 実行時の現在行と `where` 後の Table を保持し、集約関数に計算コンテキストを提供する |
 
 ## 8. 制約・注意事項
 
-- `query` のみが実行関数。`SELECT` / `DELETE` / `UPDATE` / `as` / `where` / `having` は DSL ノード値を返すだけで何も実行しない
+- `HashQuery->new` の第一引数は AOH でなければならない
 - 入力 Table の全行は同一のカラム構成を持つ必要がある（不一致の場合は die する）
+- 同一インスタンスに対して `SELECT` / `DELETE` / `UPDATE` を複数回呼び出すことができる（互いに独立）
 - `count_by` / `max_by` / `min_by` / `first_by` / `last_by` は `having` ブロック外で呼ぶと die する
 - `grep_concat` は `where` ブロック外で呼ぶと die する。返す値は指定カラムのみであり、他カラムは含まれない
 - `as` に渡す変数は `our`（パッケージ変数）で宣言する必要がある（`my` では動作しない）
-- `SELECT` の引数は配列リファレンスで渡す（配列そのものではない）
 - `having` の集約対象は `where` 後の Table であり、元の入力 Table ではない
 - `_idx` カラムは最終出力に含まれない
-- `DELETE` と `UPDATE` を同時に指定すると die する
-- `DELETE` モードでは列射影を行わない（全列を返す）
-- `DELETE` モードでも元テーブルは変更されない（非破壊的操作）
-- `UPDATE` モードでは列射影を行わない（全列を返す）
-- `UPDATE` モードでも元テーブルは変更されない（非破壊的操作）
+- `SELECT` / `DELETE` / `UPDATE` はすべて非破壊的操作（元テーブルを変更しない）
 - `UPDATE` に存在しないカラムを指定した場合は die する
-- `UPDATE` は固定値のみサポート。動的な計算は `query` 呼び出し前に Perl 側で行う
+- `UPDATE` は固定値のみサポート。動的な計算は呼び出し前に Perl 側で行う
+- `except` の引数が0個の場合は die する

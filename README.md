@@ -2,7 +2,7 @@
 
 Syntactic sugar for querying Perl AOH (Array of Hash) data with SQL-like DSL syntax. ([日本語版](README.ja.md)) The DSL closely mirrors SQL so that anyone familiar with SQL can read and write queries intuitively.
 
-`query` takes the target table as its first argument, which serves as both the `FROM` clause and the target for future UPDATE/DELETE operations — keeping the grammar consistent regardless of operation type. `where` filters rows individually; `having` filters based on aggregate conditions across the whole table, matching the SQL `WHERE` / `HAVING` distinction.
+`HashQuery->new(\@table)` creates an instance from an AOH table. `SELECT` / `DELETE` / `UPDATE` are called as instance methods. `where` filters rows individually; `having` filters based on aggregate conditions across the whole table, matching the SQL `WHERE` / `HAVING` distinction.
 
 ## Requirements
 
@@ -33,30 +33,43 @@ my $table = [
 ];
 
 our $row;
-my $result = query $table,
-    as   $row,
-    SELECT [qw/name score/],
+my $hq = HashQuery->new(\@table, as $row);
+
+my $result = $hq->SELECT(
+    [qw/name score/],
     where  { $row->{score} >= 80 },
-    having { count_by('grade') > 1 };
+    having { count_by('grade') > 1 },
+);
 ```
 
 See [docs/spec.md](docs/spec.md) for the full API reference.
 
 ## Features
 
-**Core functions:**
+**Constructor:**
+
+```perl
+my $hq = HashQuery->new(\@table);
+my $hq = HashQuery->new(\@table, as $tbl);
+```
+
+**Instance methods:**
+
+| Method | Role |
+|---|---|
+| `SELECT('*', ...)` | Column projection; rows matching `where` / `having` are returned |
+| `DELETE(...)` | Rows matching `where` / `having` are removed; remaining rows returned |
+| `UPDATE(\%set, ...)` | Rows matching `where` / `having` have their specified columns overwritten; all rows returned |
+
+**DSL helper functions:**
 
 | Function | Role |
 |---|---|
-| `query` | The only executor. Accepts an AOH table and DSL parts, returns AOH |
-| `as` | Binds an alias variable for use in `where` / `having` blocks |
-| `SELECT` | Column projection (does not change row count) |
-| `DELETE` | Declares delete mode; rows matching `where` / `having` are removed, remaining rows returned |
-| `UPDATE` | Declares update mode; rows matching `where` / `having` have their specified columns overwritten with fixed values, all rows returned |
+| `as` | Binds an alias variable for use in `where` / `having` blocks (passed to `new`) |
+| `except` | Column exclusion for `SELECT` first argument |
+| `set` | Syntax sugar for `UPDATE` first argument (key/value list → hashref) |
 | `where` | Row filter with a condition block |
 | `having` | Aggregate filter; uses `count_by`, `max_by`, etc. |
-
-> `SELECT`, `DELETE`, `UPDATE` are uppercase to avoid conflicts with Perl built-in operators.
 
 **Methods on column values (`$row->{col}`):**
 
@@ -102,9 +115,9 @@ perl test/hashquery.t
 Output:
 
 ```
-1..104
-ok 1 - query: no DSL, returns all rows
-ok 2 - query: no DSL, returns all columns
+1..60
+ok 1 - as: { as => \$var } を返す
+ok 2 - except: { except => [...] } を返す
 ...
-ok 104 - DELETE: SELECT and DELETE are symmetric for same condition
+ok 60 - 実用: スコア75以上かつチームに2人以上いるメンバーを取得
 ```
