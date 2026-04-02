@@ -80,8 +80,9 @@ sub query ($@) {
     }
 
     my $matched = [0 .. $#$tbl];
-    $matched = _run_where($tbl, $matched, $as, $whr) if $whr;
-    $matched = _run_having($tbl, $matched, $as, $hvg) if $hvg;
+    my $alias = $as ? $as->{as} : undef;
+    $matched = _run_where($tbl, $matched, $alias, $whr) if $whr;
+    $matched = _run_having($tbl, $matched, $alias, $hvg) if $hvg;
 
     my $result;
 
@@ -96,7 +97,7 @@ sub query ($@) {
     }
 
     if ($as) {
-        ${ $as->{alias} } = {
+        ${ $as->{as} } = {
             count  => scalar @$result,
             affect => $del ? scalar @$matched
                    : $upd ? scalar @$matched
@@ -126,6 +127,56 @@ sub new {
     }, $class;
 }
 
+sub SELECT {
+    my ($self, $cols_arg, @dsls) = @_;
+
+    # 列リストを確定する
+    my $cols;
+    if (!defined $cols_arg) {
+        die "SELECT requires '*', arrayref, or except(...)";
+    }
+    elsif (!ref $cols_arg && $cols_arg eq '*') {
+        $cols = $self->{all};
+    }
+    elsif (ref $cols_arg eq 'ARRAY') {
+        $cols = $cols_arg;
+    }
+    elsif (ref $cols_arg eq 'HASH' && exists $cols_arg->{except}) {
+        my %skip = map { $_ => 1 } @{ $cols_arg->{except} };
+        $cols = [ grep { !$skip{$_} } @{ $self->{all} } ];
+    }
+    else {
+        die "SELECT requires '*', arrayref, or except(...)";
+    }
+
+    # DSL パーツを解釈する
+    my ($whr, $hvg);
+    for my $dsl (@dsls) {
+        if    (exists $dsl->{where})  { $whr = $dsl }
+        elsif (exists $dsl->{having}) { $hvg = $dsl }
+        else  { die 'invalid DSL part' }
+    }
+
+    # 実行
+    my $tbl = clone($self->{table});
+    for my $i (0 .. $#$tbl) { $tbl->[$i]{_idx} = $i; }
+
+    my $matched = [0 .. $#$tbl];
+    $matched = _run_where($tbl, $matched, $self->{alias}, $whr) if $whr;
+    $matched = _run_having($tbl, $matched, $self->{alias}, $hvg) if $hvg;
+
+    my $result = _run_select($tbl, $matched, $cols);
+
+    if ($self->{alias}) {
+        ${ $self->{alias} } = {
+            count  => scalar @$result,
+            affect => scalar @$result,
+        };
+    }
+
+    return $result;
+}
+
 sub as (\$) {
     my ($var) = @_;
     return { as => $var };
@@ -141,24 +192,6 @@ sub set (@) {
     return \%h;
 }
 
-sub SELECT (;$) {
-    my ($arg) = @_;
-
-    if (!defined $arg || (!ref $arg && $arg eq '*')) {
-        return { select => '*' };
-    }
-
-    if (ref $arg eq 'ARRAY') {
-        return { select => [ @$arg ] };
-    }
-
-    if (ref $arg eq 'HASH' && ref $arg->{except} eq 'ARRAY') {
-        return { except => [ @{ $arg->{except} } ] };
-    }
-
-    die 'SELECT accepts only "*", arrayref, or { except => [...] }';
-}
-
 sub where (&) {
     my ($code) = @_;
     return { where => $code };
@@ -169,19 +202,6 @@ sub having (&) {
     return { having => $code };
 }
 
-sub DELETE () {
-    return { delete => 1 };
-}
-
-sub UPDATE ($) {
-    my ($arg) = @_;
-
-    die 'UPDATE requires a hash reference'
-        unless ref $arg eq 'HASH';
-
-    return { update => $arg };
-}
-
 sub count_by    { return HashQuery::HavingContext::count_by(@_) }
 sub max_by      { return HashQuery::HavingContext::max_by(@_) }
 sub min_by      { return HashQuery::HavingContext::min_by(@_) }
@@ -190,8 +210,7 @@ sub last_by     { return HashQuery::HavingContext::last_by(@_) }
 sub grep_concat { return HashQuery::WhereContext::grep_concat(@_) }
 
 sub _run_where {
-    my ($tbl, $matched, $as, $whr) = @_;
-    my $alias = $as ? $as->{alias} : undef;
+    my ($tbl, $matched, $alias, $whr) = @_;
     my @hit;
 
     for my $i (@$matched) {
@@ -214,8 +233,7 @@ sub _run_where {
 }
 
 sub _run_having {
-    my ($tbl, $matched, $as, $hvg) = @_;
-    my $alias = $as ? $as->{alias} : undef;
+    my ($tbl, $matched, $alias, $hvg) = @_;
     my @hit;
 
     my @matched_rows = map { $tbl->[$_] } @$matched;

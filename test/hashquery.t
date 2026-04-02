@@ -124,4 +124,105 @@ subtest 'new: 空テーブルでインスタンスを生成できる' => sub {
     isa_ok $hq, 'HashQuery';
 };
 
+# ===========================================================================
+# SELECT メソッド
+# ===========================================================================
+
+subtest 'SELECT: * で全列・全行を返す' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*');
+    is scalar @$r, 5;
+    ok exists $r->[0]{a};
+    ok exists $r->[0]{b};
+    ok exists $r->[0]{c};
+};
+
+subtest 'SELECT: 配列リファレンスで列を指定できる' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT([qw/a b/]);
+    is scalar @$r, 5;
+    ok  exists $r->[0]{a};
+    ok  exists $r->[0]{b};
+    ok !exists $r->[0]{c};
+};
+
+subtest 'SELECT: except で列を除外できる' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT(except('c'));
+    is scalar @$r, 5;
+    ok  exists $r->[0]{a};
+    ok  exists $r->[0]{b};
+    ok !exists $r->[0]{c};
+};
+
+subtest 'SELECT: except で複数列を除外できる' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT(except('b', 'c'));
+    ok  exists $r->[0]{a};
+    ok !exists $r->[0]{b};
+    ok !exists $r->[0]{c};
+};
+
+subtest 'SELECT: _idx は出力に含まれない' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*');
+    ok !exists $r->[0]{_idx};
+};
+
+subtest 'SELECT: undef を渡すと die する' => sub {
+    my $hq = HashQuery->new(\@base);
+    eval { $hq->SELECT(undef) };
+    like $@, qr/SELECT requires/;
+};
+
+subtest 'SELECT: where で行をフィルタできる' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*', where { $_->{b} == 10 });
+    is scalar @$r, 2;
+    my @names = sort map { $_->{a} } @$r;
+    is_deeply \@names, [qw/alice dave/];
+};
+
+subtest 'SELECT: having で集約フィルタできる' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*', having { count_by('b') > 1 });
+    is scalar @$r, 4;
+    ok !grep { $_->{a} eq 'carol' } @$r;
+};
+
+subtest 'SELECT: where と having を組み合わせられる' => sub {
+    my $hq = HashQuery->new(\@members);
+    my $r = $hq->SELECT(
+        [qw/team name score/],
+        where  { $_->{score} >= 75 },
+        having { count_by('team') >= 2 },
+    );
+    is scalar @$r, 3;
+    ok !grep { $_->{team} ne 'alpha' } @$r;
+};
+
+subtest 'SELECT: as で count/affect が返る' => sub {
+    our $s1;
+    my $hq = HashQuery->new(\@base, as $s1);
+    $hq->SELECT('*', where { $_->{b} == 10 });
+    is $s1->{count},  2;
+    is $s1->{affect}, 2;
+};
+
+subtest 'SELECT: 同じインスタンスを複数回呼べる' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r1 = $hq->SELECT('*', where { $_->{b} == 10 });
+    my $r2 = $hq->SELECT('*', where { $_->{b} == 20 });
+    is scalar @$r1, 2;
+    is scalar @$r2, 2;
+};
+
+subtest 'SELECT: 元テーブルは変更されない' => sub {
+    my @orig = ({ a => 1, b => 2 }, { a => 3, b => 4 });
+    my @copy = map { +{ %$_ } } @orig;
+    my $hq = HashQuery->new(\@orig);
+    $hq->SELECT('*');
+    is_deeply \@orig, \@copy;
+};
+
 done_testing;
