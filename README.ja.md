@@ -104,7 +104,6 @@ my $hq = HashQuery->new(\@table, as $tbl);
 |---|---|
 | [docs/spec.md](docs/spec.md) | 機能仕様・API リファレンス |
 | [docs/test-spec.md](docs/test-spec.md) | テストケース定義 |
-| [docs/CodingRule.md](docs/CodingRule.md) | コーディング規約 |
 
 ## テスト
 
