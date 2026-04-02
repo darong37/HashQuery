@@ -285,4 +285,92 @@ subtest 'DELETE: SELECT と対称動作する' => sub {
     is scalar @$selected + scalar @$deleted, 5;
 };
 
+# ===========================================================================
+# UPDATE メソッド
+# ===========================================================================
+
+subtest 'UPDATE: where にマッチした行を更新して全行返す' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->UPDATE({ b => 99 }, where { $_->{b} == 10 });
+    is scalar @$r, 5;
+    my @updated = grep { $_->{b} == 99 } @$r;
+    my @names   = sort map { $_->{a} } @updated;
+    is_deeply \@names, [qw/alice dave/];
+};
+
+subtest 'UPDATE: set 関数形式でも更新できる' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->UPDATE(set(b => 99), where { $_->{b} == 10 });
+    is scalar @$r, 5;
+    my @updated = grep { $_->{b} == 99 } @$r;
+    is scalar @updated, 2;
+};
+
+subtest 'UPDATE: 条件なしで全行更新する' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->UPDATE({ b => 0 });
+    is scalar @$r, 5;
+    my @vals = map { $_->{b} } @$r;
+    is_deeply \@vals, [0, 0, 0, 0, 0];
+};
+
+subtest 'UPDATE: 一致なしで全行そのまま返す' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->UPDATE({ b => 0 }, where { $_->{b} > 999 });
+    is scalar @$r, 5;
+    my @vals = map { $_->{b} } @$r;
+    is_deeply \@vals, [10, 20, 30, 10, 20];
+};
+
+subtest 'UPDATE: having と組み合わせて更新できる' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->UPDATE({ b => 0 }, having { count_by('b') > 1 });
+    my @zeroed = grep { $_->{b} == 0 } @$r;
+    is scalar @zeroed, 4;
+    my @intact = grep { $_->{b} != 0 } @$r;
+    is $intact[0]{a}, 'carol';
+};
+
+subtest 'UPDATE: 複数カラムを同時に更新できる' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->UPDATE({ b => 0, c => 0 }, where { $_->{a} eq 'alice' });
+    my ($alice) = grep { $_->{a} eq 'alice' } @$r;
+    is $alice->{b}, 0;
+    is $alice->{c}, 0;
+};
+
+subtest 'UPDATE: _idx は出力に含まれない' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->UPDATE({ b => 0 });
+    ok !exists $r->[0]{_idx};
+};
+
+subtest 'UPDATE: 元テーブルは変更されない' => sub {
+    my @orig = ({ a => 1, b => 2 }, { a => 3, b => 4 });
+    my @copy = map { +{ %$_ } } @orig;
+    my $hq = HashQuery->new(\@orig);
+    $hq->UPDATE({ b => 99 }, where { $_->{a} == 1 });
+    is_deeply \@orig, \@copy;
+};
+
+subtest 'UPDATE: as で count/affect が返る' => sub {
+    our $u1;
+    my $hq = HashQuery->new(\@base, as $u1);
+    $hq->UPDATE({ b => 0 }, where { $_->{b} == 10 });
+    is $u1->{count},  5;
+    is $u1->{affect}, 2;
+};
+
+subtest 'UPDATE: 存在しないカラムを指定すると die する' => sub {
+    my $hq = HashQuery->new(\@base);
+    eval { $hq->UPDATE({ nonexistent => 1 }) };
+    like $@, qr/unknown column in UPDATE: nonexistent/;
+};
+
+subtest 'UPDATE: ハッシュリファレンス以外を渡すと die する' => sub {
+    my $hq = HashQuery->new(\@base);
+    eval { $hq->UPDATE('invalid') };
+    like $@, qr/UPDATE requires a hash reference/;
+};
+
 done_testing;

@@ -212,6 +212,46 @@ sub DELETE {
     return $result;
 }
 
+sub UPDATE {
+    my ($self, $upd_arg, @dsls) = @_;
+
+    die 'UPDATE requires a hash reference'
+        unless ref $upd_arg eq 'HASH';
+
+    my %valid    = map { $_ => 1 } @{ $self->{all} };
+    my %upd_cols = %$upd_arg;
+
+    for my $col (keys %upd_cols) {
+        die "unknown column in UPDATE: $col"
+            unless $valid{$col};
+    }
+
+    my ($whr, $hvg);
+    for my $dsl (@dsls) {
+        if    (exists $dsl->{where})  { $whr = $dsl }
+        elsif (exists $dsl->{having}) { $hvg = $dsl }
+        else  { die 'invalid DSL part' }
+    }
+
+    my $tbl = clone($self->{table});
+    for my $i (0 .. $#$tbl) { $tbl->[$i]{_idx} = $i; }
+
+    my $matched = [0 .. $#$tbl];
+    $matched = _run_where($tbl, $matched, $self->{alias}, $whr) if $whr;
+    $matched = _run_having($tbl, $matched, $self->{alias}, $hvg) if $hvg;
+
+    my $result = _run_update($tbl, $matched, { update => \%upd_cols }, $self->{all});
+
+    if ($self->{alias}) {
+        ${ $self->{alias} } = {
+            count  => scalar @$result,
+            affect => scalar @$matched,
+        };
+    }
+
+    return $result;
+}
+
 sub as (\$) {
     my ($var) = @_;
     return { as => $var };
