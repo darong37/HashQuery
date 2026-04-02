@@ -106,6 +106,26 @@ sub query ($@) {
     return $result;
 }
 
+sub new {
+    my ($class, $table, $opts) = @_;
+
+    die 'HashQuery->new requires an Array of Hash'
+        unless ref $table eq 'ARRAY';
+
+    my @all = _check_cols($table);
+
+    my $alias;
+    if ($opts && ref $opts eq 'HASH') {
+        $alias = $opts->{as};
+    }
+
+    return bless {
+        table => clone($table),
+        all   => \@all,
+        alias => $alias,
+    }, $class;
+}
+
 sub as (\$) {
     my ($var) = @_;
     return { as => $var };

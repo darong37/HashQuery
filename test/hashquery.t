@@ -77,4 +77,51 @@ subtest 'set: ハッシュリファレンスを返す' => sub {
     is_deeply $node, { score => 99, grade => 'A' };
 };
 
+# ===========================================================================
+# HashQuery->new
+# ===========================================================================
+
+subtest 'new: インスタンスを生成できる' => sub {
+    my $hq = HashQuery->new(\@base);
+    ok defined $hq;
+    isa_ok $hq, 'HashQuery';
+};
+
+subtest 'new: 配列リファレンス以外を渡すと die する' => sub {
+    eval { HashQuery->new([]) };
+    ok !$@;
+    eval { HashQuery->new('string') };
+    like $@, qr/HashQuery->new requires an Array of Hash/;
+};
+
+subtest 'new: カラム構成が不一致だと die する' => sub {
+    my @bad = ({ a => 1 }, { b => 2 });
+    eval { HashQuery->new(\@bad) };
+    like $@, qr/table columns are not consistent/;
+};
+
+subtest 'new: 元テーブルを変更しない' => sub {
+    my @orig = ({ a => 1, b => 2 }, { a => 3, b => 4 });
+    my @copy = map { +{ %$_ } } @orig;
+    HashQuery->new(\@orig);
+    is_deeply \@orig, \@copy;
+};
+
+subtest 'new: as オプションを受け取れる（as $var 形式）' => sub {
+    our $v;
+    my $hq = HashQuery->new(\@base, as $v);
+    isa_ok $hq, 'HashQuery';
+};
+
+subtest 'new: as オプションを受け取れる（ハッシュリファレンス形式）' => sub {
+    our $v2;
+    my $hq = HashQuery->new(\@base, { as => \$v2 });
+    isa_ok $hq, 'HashQuery';
+};
+
+subtest 'new: 空テーブルでインスタンスを生成できる' => sub {
+    my $hq = HashQuery->new([]);
+    isa_ok $hq, 'HashQuery';
+};
+
 done_testing;
