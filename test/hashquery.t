@@ -373,4 +373,155 @@ subtest 'UPDATE: ハッシュリファレンス以外を渡すと die する' =>
     like $@, qr/UPDATE requires a hash reference/;
 };
 
+# ===========================================================================
+# 条件メソッド（HashQuery::Value）
+# ===========================================================================
+
+subtest 'like: パターンマッチする' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*', where { $_->{a}->like('a%') });
+    is scalar @$r, 1;
+    is $r->[0]{a}, 'alice';
+};
+
+subtest 'like: % で複数文字にマッチする' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*', where { $_->{a}->like('%e') });
+    my @names = sort map { $_->{a} } @$r;
+    is_deeply \@names, [qw/alice dave eve/];
+};
+
+subtest 'not_like: パターンに一致しない行を返す' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*', where { $_->{a}->not_like('a%') });
+    is scalar @$r, 4;
+    ok !grep { $_->{a} eq 'alice' } @$r;
+};
+
+subtest 'between: 範囲内の行を返す（両端含む）' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*', where { $_->{b}->between(10, 20) });
+    is scalar @$r, 4;
+};
+
+subtest 'between: 排他境界で範囲を絞れる' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*', where { $_->{b}->between('10!', '20!') });
+    is scalar @$r, 0;
+};
+
+subtest 'in: リストに含まれる行を返す' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*', where { $_->{b}->in(10, 30) });
+    my @names = sort map { $_->{a} } @$r;
+    is_deeply \@names, [qw/alice carol dave/];
+};
+
+subtest 'not_in: リストに含まれない行を返す' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*', where { $_->{b}->not_in(10, 30) });
+    my @names = sort map { $_->{a} } @$r;
+    is_deeply \@names, [qw/bob eve/];
+};
+
+subtest 'asNull: undef を デフォルト値に置き換える' => sub {
+    my $hq = HashQuery->new(\@null_tbl);
+    my $r = $hq->SELECT('*', where { $_->{val}->asNull(0) != 0 });
+    is scalar @$r, 1;
+    is $r->[0]{name}, 'y';
+};
+
+# ===========================================================================
+# having 集計関数
+# ===========================================================================
+
+subtest 'count_by: グループ内の行数を返す' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*', having { count_by('b') == 2 });
+    is scalar @$r, 4;
+    ok !grep { $_->{a} eq 'carol' } @$r;
+};
+
+subtest 'max_by: グループ内の最大値を返す' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*', having { max_by('c', 'b') == 250 });
+    my @names = sort map { $_->{a} } @$r;
+    is_deeply \@names, [qw/bob eve/];
+};
+
+subtest 'min_by: グループ内の最小値を返す' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*', having { min_by('c', 'b') == 100 });
+    my @names = sort map { $_->{a} } @$r;
+    is_deeply \@names, [qw/alice dave/];
+};
+
+subtest 'first_by: グループ内の先頭行を返す' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*', having { first_by('b') });
+    my @names = sort map { $_->{a} } @$r;
+    is_deeply \@names, [qw/alice bob carol/];
+};
+
+subtest 'last_by: グループ内の末尾行を返す' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->SELECT('*', having { last_by('b') });
+    my @names = sort map { $_->{a} } @$r;
+    is_deeply \@names, [qw/carol dave eve/];
+    # carol: b=30（グループ内唯一）、dave: b=10の末尾、eve: b=20の末尾
+};
+
+# ===========================================================================
+# grep_concat
+# ===========================================================================
+
+subtest 'grep_concat: マッチした行の値を返す' => sub {
+    my $hq = HashQuery->new(\@log_tbl);
+    my $r = $hq->SELECT('*', where { grep_concat('msg', qr/ERROR/) ne '' });
+    is scalar @$r, 2;
+    ok !grep { $_->{msg} !~ /ERROR/ } @$r;
+};
+
+subtest 'grep_concat: 前後行の値を連結した文字列を返す' => sub {
+    my $hq = HashQuery->new(\@log_tbl);
+    my $r = $hq->SELECT('*', where { grep_concat('msg', qr/ERROR/, -1, 1) ne '' });
+    # grep_concat は現在行がマッチした場合のみ非空文字列を返す（ERROR行のみ選択）
+    is scalar @$r, 2;
+    ok !grep { $_->{msg} !~ /ERROR/ } @$r;
+};
+
+subtest 'grep_concat: 指定カラムの値のみ連結する' => sub {
+    my $hq = HashQuery->new(\@log_tbl);
+    my $r = $hq->SELECT('*', where {
+        my $ctx = grep_concat('msg', qr/ERROR connection/, 0, 1);
+        $ctx =~ /ERROR connection failed/ && $ctx =~ /retrying/;
+    });
+    is scalar @$r, 1;
+    is $r->[0]{line}, 2;
+};
+
+# ===========================================================================
+# 実用例
+# ===========================================================================
+
+subtest '実用: as を使って where でフィルタする' => sub {
+    our $m1;
+    my $hq = HashQuery->new(\@members, as $m1);
+    my $r = $hq->SELECT([qw/team name/], where { $m1->{role} eq 'lead' });
+    is scalar @$r, 3;
+    ok !grep { $_->{role} } @$r;   # 出力列に role は含まれない
+};
+
+subtest '実用: スコア75以上かつチームに2人以上いるメンバーを取得' => sub {
+    our $m2;
+    my $hq = HashQuery->new(\@members, as $m2);
+    my $r = $hq->SELECT(
+        [qw/team name score/],
+        where  { $m2->{score} >= 75 },
+        having { count_by('team') >= 2 },
+    );
+    is scalar @$r, 3;
+    is_deeply [sort map { $_->{name} } @$r], [qw/alice bob carol/];
+};
+
 done_testing;
