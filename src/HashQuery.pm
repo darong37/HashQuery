@@ -177,6 +177,41 @@ sub SELECT {
     return $result;
 }
 
+sub DELETE {
+    my ($self, @dsls) = @_;
+
+    my ($whr, $hvg);
+    for my $dsl (@dsls) {
+        if    (exists $dsl->{where})  { $whr = $dsl }
+        elsif (exists $dsl->{having}) { $hvg = $dsl }
+        else  { die 'invalid DSL part' }
+    }
+
+    my $tbl = clone($self->{table});
+    for my $i (0 .. $#$tbl) { $tbl->[$i]{_idx} = $i; }
+
+    my $matched;
+    if ($whr || $hvg) {
+        $matched = [0 .. $#$tbl];
+        $matched = _run_where($tbl, $matched, $self->{alias}, $whr) if $whr;
+        $matched = _run_having($tbl, $matched, $self->{alias}, $hvg) if $hvg;
+    }
+    else {
+        $matched = [];
+    }
+
+    my $result = _run_delete($tbl, $matched);
+
+    if ($self->{alias}) {
+        ${ $self->{alias} } = {
+            count  => scalar @$result,
+            affect => scalar @$matched,
+        };
+    }
+
+    return $result;
+}
+
 sub as (\$) {
     my ($var) = @_;
     return { as => $var };

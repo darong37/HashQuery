@@ -225,4 +225,64 @@ subtest 'SELECT: 元テーブルは変更されない' => sub {
     is_deeply \@orig, \@copy;
 };
 
+# ===========================================================================
+# DELETE メソッド
+# ===========================================================================
+
+subtest 'DELETE: where にマッチした行を削除して残りを返す' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->DELETE(where { $_->{b} == 10 });
+    is scalar @$r, 3;
+    my @names = sort map { $_->{a} } @$r;
+    is_deeply \@names, [qw/bob carol eve/];
+};
+
+subtest 'DELETE: 条件なしで全行を返す（何も削除しない）' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->DELETE();
+    is scalar @$r, 5;
+};
+
+subtest 'DELETE: 一致なしで全行残る' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->DELETE(where { $_->{b} > 999 });
+    is scalar @$r, 5;
+};
+
+subtest 'DELETE: having と組み合わせて削除できる' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->DELETE(having { count_by('b') > 1 });
+    is scalar @$r, 1;
+    is $r->[0]{a}, 'carol';
+};
+
+subtest 'DELETE: _idx は出力に含まれない' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r = $hq->DELETE(where { $_->{b} > 999 });
+    ok !exists $r->[0]{_idx};
+};
+
+subtest 'DELETE: 元テーブルは変更されない' => sub {
+    my @orig = ({ a => 1, b => 2 }, { a => 3, b => 4 });
+    my @copy = map { +{ %$_ } } @orig;
+    my $hq = HashQuery->new(\@orig);
+    $hq->DELETE(where { $_->{a} == 1 });
+    is_deeply \@orig, \@copy;
+};
+
+subtest 'DELETE: as で count/affect が返る' => sub {
+    our $d1;
+    my $hq = HashQuery->new(\@base, as $d1);
+    $hq->DELETE(where { $_->{b} == 10 });
+    is $d1->{count},  3;
+    is $d1->{affect}, 2;
+};
+
+subtest 'DELETE: SELECT と対称動作する' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $selected = $hq->SELECT('*', where { $_->{b} == 10 });
+    my $deleted  = $hq->DELETE(where { $_->{b} == 10 });
+    is scalar @$selected + scalar @$deleted, 5;
+};
+
 done_testing;
