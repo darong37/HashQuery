@@ -71,14 +71,14 @@ sub SELECT {
     }
 
     # 実行
-    my $tbl = clone($self->{table});
-    for my $i (0 .. $#$tbl) { $tbl->[$i]{_idx} = $i; }
+    my $org = clone($self->{table});
+    for my $i (0 .. $#$org) { $org->[$i]{_idx} = $i; }
 
-    my $matched = [0 .. $#$tbl];
-    $matched = _run_where($tbl, $matched, $self->{alias}, $whr) if $whr;
-    $matched = _run_having($tbl, $matched, $self->{alias}, $hvg) if $hvg;
+    my $tbl = clone($org);
+    $tbl = _run_where($tbl, $self->{alias}, $whr) if $whr;
+    $tbl = _run_having($tbl, $self->{alias}, $hvg) if $hvg;
 
-    my $result = _run_select($tbl, $matched, $cols);
+    my $result = _run_select($tbl, $cols);
 
     if ($self->{alias}) {
         ${ $self->{alias} } = {
@@ -100,25 +100,22 @@ sub DELETE {
         else  { die 'invalid DSL part' }
     }
 
-    my $tbl = clone($self->{table});
-    for my $i (0 .. $#$tbl) { $tbl->[$i]{_idx} = $i; }
+    my $org = clone($self->{table});
+    for my $i (0 .. $#$org) { $org->[$i]{_idx} = $i; }
 
-    my $matched;
+    my $tbl = [];
     if ($whr || $hvg) {
-        $matched = [0 .. $#$tbl];
-        $matched = _run_where($tbl, $matched, $self->{alias}, $whr) if $whr;
-        $matched = _run_having($tbl, $matched, $self->{alias}, $hvg) if $hvg;
-    }
-    else {
-        $matched = [];
+        $tbl = clone($org);
+        $tbl = _run_where($tbl, $self->{alias}, $whr) if $whr;
+        $tbl = _run_having($tbl, $self->{alias}, $hvg) if $hvg;
     }
 
-    my $result = _run_delete($tbl, $matched);
+    my $result = _run_delete($org, $tbl);
 
     if ($self->{alias}) {
         ${ $self->{alias} } = {
             count  => scalar @$result,
-            affect => scalar @$matched,
+            affect => scalar @$tbl,
         };
     }
 
@@ -146,19 +143,19 @@ sub UPDATE {
         else  { die 'invalid DSL part' }
     }
 
-    my $tbl = clone($self->{table});
-    for my $i (0 .. $#$tbl) { $tbl->[$i]{_idx} = $i; }
+    my $org = clone($self->{table});
+    for my $i (0 .. $#$org) { $org->[$i]{_idx} = $i; }
 
-    my $matched = [0 .. $#$tbl];
-    $matched = _run_where($tbl, $matched, $self->{alias}, $whr) if $whr;
-    $matched = _run_having($tbl, $matched, $self->{alias}, $hvg) if $hvg;
+    my $tbl = clone($org);
+    $tbl = _run_where($tbl, $self->{alias}, $whr) if $whr;
+    $tbl = _run_having($tbl, $self->{alias}, $hvg) if $hvg;
 
-    my $result = _run_update($tbl, $matched, { update => \%upd_cols }, $self->{all});
+    my $result = _run_update($org, $tbl, \%upd_cols, $self->{all});
 
     if ($self->{alias}) {
         ${ $self->{alias} } = {
             count  => scalar @$result,
-            affect => scalar @$matched,
+            affect => scalar @$tbl,
         };
     }
 
@@ -198,98 +195,77 @@ sub last_by     { return HashQuery::HavingContext::last_by(@_) }
 sub grep_concat { return HashQuery::WhereContext::grep_concat(@_) }
 
 sub _run_where {
-    my ($tbl, $matched, $alias, $whr) = @_;
+    my ($tbl, $alias, $whr) = @_;
     my @hit;
 
-    for my $i (@$matched) {
-        my $row = $tbl->[$i];
-        my $h   = HashQuery::RowHash->new($row, $tbl, $i);
+    for my $row (@$tbl) {
+        my $h = HashQuery::RowHash->new($row, $tbl, $row->{_idx});
         local $_ = $h;
         local $HashQuery::WhereContext::ROW   = $row;
         local $HashQuery::WhereContext::TABLE = $tbl;
-
-        if ($alias) {
-            $$alias = $h;
-            push @hit, $i if $whr->{where}->();
-        }
-        else {
-            push @hit, $i if $whr->{where}->();
-        }
+        if ($alias) { $$alias = $h }
+        push @hit, $row if $whr->{where}->();
     }
 
     return \@hit;
 }
 
 sub _run_having {
-    my ($tbl, $matched, $alias, $hvg) = @_;
+    my ($tbl, $alias, $hvg) = @_;
     my @hit;
 
-    my @matched_rows = map { $tbl->[$_] } @$matched;
-
-    for my $i (@$matched) {
-        my $row = $tbl->[$i];
-        my $h   = HashQuery::RowHash->new($row, $tbl, $i);
+    for my $row (@$tbl) {
+        my $h = HashQuery::RowHash->new($row, $tbl, $row->{_idx});
         local $_ = $h;
         local $HashQuery::HavingContext::ROW   = $row;
-        local $HashQuery::HavingContext::TABLE = \@matched_rows;
-
-        if ($alias) {
-            $$alias = $h;
-            push @hit, $i if $hvg->{having}->();
-        }
-        else {
-            push @hit, $i if $hvg->{having}->();
-        }
+        local $HashQuery::HavingContext::TABLE = $tbl;
+        if ($alias) { $$alias = $h }
+        push @hit, $row if $hvg->{having}->();
     }
 
     return \@hit;
 }
 
-sub _run_update {
-    my ($tbl, $matched, $upd, $all) = @_;
-    my %valid    = map { $_ => 1 } @$all;
-    my %upd_cols = %{ $upd->{update} };
-
-    for my $col (keys %upd_cols) {
-        die "unknown column in UPDATE: $col"
-            unless $valid{$col};
-    }
-
-    my %upd = map { $_ => 1 } @$matched;
+sub _run_select {
+    my ($tbl, $cols) = @_;
     my @out;
-    for my $i (0 .. $#$tbl) {
-        my $row = $tbl->[$i];
-        my %r;
-        @r{@$all} = @{$row}{@$all};
-        if ($upd{$i}) {
-            $r{$_} = $upd_cols{$_} for keys %upd_cols;
-        }
-        push @out, \%r;
+
+    for my $row (@$tbl) {
+        my %picked;
+        @picked{@$cols} = @{$row}{@$cols};
+        push @out, \%picked;
     }
+
     return \@out;
 }
 
 sub _run_delete {
-    my ($tbl, $matched) = @_;
-    my %del = map { $_ => 1 } @$matched;
+    my ($org, $tbl) = @_;
+    my %del = map { $_->{_idx} => 1 } @$tbl;
     my @out;
-    for my $i (0 .. $#$tbl) {
-        next if $del{$i};
-        my %h = %{$tbl->[$i]};
+
+    for my $row (@$org) {
+        next if $del{$row->{_idx}};
+        my %h = %$row;
         delete $h{_idx};
         push @out, \%h;
     }
+
     return \@out;
 }
 
-sub _run_select {
-    my ($tbl, $matched, $cols) = @_;
+sub _run_update {
+    my ($org, $tbl, $upd_cols, $all) = @_;
+    my %upd = map { $_->{_idx} => 1 } @$tbl;
     my @out;
 
-    for my $i (@$matched) {
-        my %picked;
-        @picked{@$cols} = @{$tbl->[$i]}{@$cols};
-        push @out, \%picked;
+    for my $row (@$org) {
+        my %r;
+        @r{@$all} = @{$row}{@$all};
+        if ($upd{$row->{_idx}}) {
+            $r{$_} = $upd_cols->{$_} for keys %$upd_cols;
+        }
+        push @out, \%r;
     }
 
     return \@out;
