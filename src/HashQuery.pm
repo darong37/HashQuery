@@ -11,6 +11,7 @@ our @EXPORT = qw(
     as
     SELECT
     DELETE
+    UPDATE
     where
     having
     count_by
@@ -28,7 +29,8 @@ sub query ($@) {
         unless ref $table eq 'ARRAY';
 
     my @all = _check_cols($table);
-    my ($as, $sel, $exc, $whr, $hvg, $del);
+    my $sel = \@all;
+    my ($as, $whr, $hvg, $del, $upd);
 
     for my $dsl (@dsls) {
         die 'invalid DSL part'
@@ -38,10 +40,20 @@ sub query ($@) {
             $as = $dsl;
         }
         elsif (exists $dsl->{select}) {
-            $sel = $dsl;
+            my $arg = $dsl->{select};
+            if (!defined $arg || $arg eq '*') {
+                $sel = \@all;
+            }
+            elsif (ref $arg eq 'ARRAY') {
+                $sel = $arg;
+            }
+            else {
+                die 'invalid SELECT node';
+            }
         }
         elsif (exists $dsl->{except}) {
-            $exc = $dsl;
+            my %skip = map { $_ => 1 } @{ $dsl->{except} };
+            $sel = [ grep { !$skip{$_} } @all ];
         }
         elsif (exists $dsl->{where}) {
             $whr = $dsl;
@@ -52,13 +64,16 @@ sub query ($@) {
         elsif (exists $dsl->{delete}) {
             $del = $dsl;
         }
+        elsif (exists $dsl->{update}) {
+            $upd = $dsl;
+        }
         else {
             die 'invalid DSL part';
         }
     }
 
-    die 'select and delete cannot be used together'
-        if ($sel || $exc) && $del;
+    die 'DELETE and UPDATE cannot be used together'
+        if $del && $upd;
 
     my $tbl = clone($table);
 
@@ -66,51 +81,31 @@ sub query ($@) {
         $tbl->[$i]{_idx} = $i;
     }
 
+    my $matched = [0 .. $#$tbl];
+    $matched = _run_where($tbl, $matched, $as, $whr) if $whr;
+    $matched = _run_having($tbl, $matched, $as, $hvg) if $hvg;
+
+    my $result;
+
     if ($del) {
-        my $matched = $tbl;
-        $matched = _run_where($matched, $as, $whr) if $whr;
-        $matched = _run_having($matched, $as, $hvg) if $hvg;
-
-        my %del_idx = map { $_->{_idx} => 1 } @$matched;
-        my @remaining = grep { !$del_idx{ $_->{_idx} } } @$tbl;
-        my $result = _run_select(\@remaining, \@all);
-
-        if ($as) {
-            ${ $as->{alias} } = {
-                count  => scalar @$result,
-                affect => scalar @$matched,
-            };
-        }
-        return $result;
+        $result = _run_delete($tbl, $matched);
     }
-
-    my $cols;
-
-    if ($exc) {
-        my %skip = map { $_ => 1 } @{ $exc->{except} };
-        $cols = [ grep { !$skip{$_} } @all ];
-    }
-    elsif (!$sel || $sel->{select} eq '*') {
-        $cols = \@all;
-    }
-    elsif (ref $sel->{select} eq 'ARRAY') {
-        $cols = $sel->{select};
+    elsif ($upd) {
+        $result = _run_update($tbl, $matched, $upd, \@all);
     }
     else {
-        die 'invalid SELECT node';
+        $result = _run_select($tbl, $matched, $sel);
     }
-
-    $tbl = _run_where($tbl, $as, $whr) if $whr;
-    $tbl = _run_having($tbl, $as, $hvg) if $hvg;
-    $tbl = _run_select($tbl, $cols);
 
     if ($as) {
         ${ $as->{alias} } = {
-            count  => scalar @$tbl,
-            affect => scalar @$tbl,
+            count  => scalar @$result,
+            affect => $del ? scalar @$matched
+                   : $upd ? scalar @$matched
+                   :        scalar @$result,
         };
     }
-    return $tbl;
+    return $result;
 }
 
 sub as (\$) {
@@ -153,6 +148,15 @@ sub DELETE () {
     return { delete => 1 };
 }
 
+sub UPDATE ($) {
+    my ($arg) = @_;
+
+    die 'UPDATE requires a hash reference'
+        unless ref $arg eq 'HASH';
+
+    return { update => $arg };
+}
+
 sub count_by    { return HashQuery::HavingContext::count_by(@_) }
 sub max_by      { return HashQuery::HavingContext::max_by(@_) }
 sub min_by      { return HashQuery::HavingContext::min_by(@_) }
@@ -161,23 +165,23 @@ sub last_by     { return HashQuery::HavingContext::last_by(@_) }
 sub grep_concat { return HashQuery::WhereContext::grep_concat(@_) }
 
 sub _run_where {
-    my ($table, $as, $whr) = @_;
+    my ($tbl, $matched, $as, $whr) = @_;
     my $alias = $as ? $as->{alias} : undef;
     my @hit;
 
-    for my $i (0 .. $#$table) {
-        my $row = $table->[$i];
-        my $h   = HashQuery::RowHash->new($row, $table, $i);
+    for my $i (@$matched) {
+        my $row = $tbl->[$i];
+        my $h   = HashQuery::RowHash->new($row, $tbl, $i);
         local $_ = $h;
         local $HashQuery::WhereContext::ROW   = $row;
-        local $HashQuery::WhereContext::TABLE = $table;
+        local $HashQuery::WhereContext::TABLE = $tbl;
 
         if ($alias) {
             $$alias = $h;
-            push @hit, $row if $whr->{where}->();
+            push @hit, $i if $whr->{where}->();
         }
         else {
-            push @hit, $row if $whr->{where}->();
+            push @hit, $i if $whr->{where}->();
         }
     }
 
@@ -185,36 +189,75 @@ sub _run_where {
 }
 
 sub _run_having {
-    my ($table, $as, $hvg) = @_;
+    my ($tbl, $matched, $as, $hvg) = @_;
     my $alias = $as ? $as->{alias} : undef;
     my @hit;
 
-    for my $i (0 .. $#$table) {
-        my $row = $table->[$i];
-        my $h   = HashQuery::RowHash->new($row, $table, $i);
+    my @matched_rows = map { $tbl->[$_] } @$matched;
+
+    for my $i (@$matched) {
+        my $row = $tbl->[$i];
+        my $h   = HashQuery::RowHash->new($row, $tbl, $i);
         local $_ = $h;
         local $HashQuery::HavingContext::ROW   = $row;
-        local $HashQuery::HavingContext::TABLE = $table;
+        local $HashQuery::HavingContext::TABLE = \@matched_rows;
 
         if ($alias) {
             $$alias = $h;
-            push @hit, $row if $hvg->{having}->();
+            push @hit, $i if $hvg->{having}->();
         }
         else {
-            push @hit, $row if $hvg->{having}->();
+            push @hit, $i if $hvg->{having}->();
         }
     }
 
     return \@hit;
 }
 
+sub _run_update {
+    my ($tbl, $matched, $upd, $all) = @_;
+    my %valid    = map { $_ => 1 } @$all;
+    my %upd_cols = %{ $upd->{update} };
+
+    for my $col (keys %upd_cols) {
+        die "unknown column in UPDATE: $col"
+            unless $valid{$col};
+    }
+
+    my %upd = map { $_ => 1 } @$matched;
+    my @out;
+    for my $i (0 .. $#$tbl) {
+        my $row = $tbl->[$i];
+        my %r;
+        @r{@$all} = @{$row}{@$all};
+        if ($upd{$i}) {
+            $r{$_} = $upd_cols{$_} for keys %upd_cols;
+        }
+        push @out, \%r;
+    }
+    return \@out;
+}
+
+sub _run_delete {
+    my ($tbl, $matched) = @_;
+    my %del = map { $_ => 1 } @$matched;
+    my @out;
+    for my $i (0 .. $#$tbl) {
+        next if $del{$i};
+        my %h = %{$tbl->[$i]};
+        delete $h{_idx};
+        push @out, \%h;
+    }
+    return \@out;
+}
+
 sub _run_select {
-    my ($table, $cols) = @_;
+    my ($tbl, $matched, $cols) = @_;
     my @out;
 
-    for my $row (@$table) {
+    for my $i (@$matched) {
         my %picked;
-        @picked{@$cols} = @{$row}{@$cols};
+        @picked{@$cols} = @{$tbl->[$i]}{@$cols};
         push @out, \%picked;
     }
 

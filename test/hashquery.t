@@ -865,14 +865,9 @@ subtest 'delete: DSL ノードを返す' => sub {
     is_deeply $d, { delete => 1 };
 };
 
-subtest 'DELETE: SELECT と同時に指定するとdieする' => sub {
-    eval { query \@base, SELECT, DELETE };
-    like $@, qr/select and delete cannot be used together/;
-};
-
-subtest 'DELETE: except と同時に指定するとdieする' => sub {
-    eval { query \@base, SELECT { except => ['c'] }, DELETE };
-    like $@, qr/select and delete cannot be used together/;
+subtest 'DELETE: UPDATE と同時に指定するとdieする' => sub {
+    eval { query \@base, DELETE, UPDATE { b => 0 } };
+    like $@, qr/DELETE and UPDATE cannot be used together/;
 };
 
 # ===========================================================================
@@ -925,6 +920,25 @@ subtest 'DELETE: SELECT と同じ条件で対称動作する' => sub {
     my $selected = query \@base, SELECT, where { $_->{b} == 10 };
     my $deleted  = query \@base, DELETE, where { $_->{b} == 10 };
     is scalar @$selected + scalar @$deleted, 5;
+};
+
+# ===========================================================================
+# UPDATE — DSL ノード
+# ===========================================================================
+
+subtest 'UPDATE: DSL ノードを返す' => sub {
+    my $u = UPDATE { score => 100 };
+    is_deeply $u, { update => { score => 100 } };
+};
+
+subtest 'UPDATE: 複数カラム指定のDSLノードを返す' => sub {
+    my $u = UPDATE { score => 100, grade => 'A' };
+    is_deeply $u, { update => { score => 100, grade => 'A' } };
+};
+
+subtest 'UPDATE: ハッシュリファレンス以外はdieする' => sub {
+    eval { UPDATE('invalid') };
+    like $@, qr/UPDATE requires a hash reference/;
 };
 
 done_testing;

@@ -26,6 +26,14 @@ Perl の組み込み `select`（IO セレクタ）および `delete`（ハッシ
 
 ---
 
+## `SELECT` は省略可能（内部仕様）
+
+`SELECT` DSL は省略可能。`DELETE` も `UPDATE` も指定されなかった場合、暗黙的に SELECT モードとして動作する。`SELECT` を明示した場合は列射影の指定（配列リファレンスまたは `except`）としてのみ機能する。
+
+`DELETE` と `UPDATE` の同時指定は die するが、`SELECT` と `DELETE` / `UPDATE` の同時指定は die しない（`SELECT` によって指定された列リストは DELETE / UPDATE モードでは無視される）。
+
+---
+
 ## `_row` 内部カラムについて
 
 `query` 実行時に各行へ自動付加する 0 始まりの行番号カラム。`grep_concat` が前後行を参照する際の基点として使用する。最終出力には含まれない。
