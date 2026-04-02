@@ -7,11 +7,9 @@ use Clone qw(clone);
 use Exporter 'import';
 
 our @EXPORT = qw(
-    query
     as
-    SELECT
-    DELETE
-    UPDATE
+    except
+    set
     where
     having
     count_by
@@ -109,11 +107,18 @@ sub query ($@) {
 }
 
 sub as (\$) {
-    my ($alias) = @_;
+    my ($var) = @_;
+    return { as => $var };
+}
 
-    return {
-        alias => $alias,
-    };
+sub except (@) {
+    die 'except requires at least one column name' unless @_;
+    return { except => [@_] };
+}
+
+sub set (@) {
+    my %h = @_;
+    return \%h;
 }
 
 sub SELECT (;$) {
