@@ -29,5 +29,6 @@ Thumbs.db
 
 # Project local files
 CLAUDE.md
+appset.sh
 lib/
 .claude/worktrees/
