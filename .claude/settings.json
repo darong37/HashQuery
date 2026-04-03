@@ -12,5 +12,8 @@
       "Bash(ls*)",
       "Bash(mkdir*)"
     ]
+  },
+  "env": {
+    "PERL5LIB": "src:lib"
   }
 }

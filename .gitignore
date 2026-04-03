@@ -26,3 +26,8 @@ local/
 # OS
 .DS_Store
 Thumbs.db
+
+# Project local files
+CLAUDE.md
+lib/
+.claude/worktrees/

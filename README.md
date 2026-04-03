@@ -9,6 +9,12 @@ Syntactic sugar for querying Perl AOH (Array of Hash) data with SQL-like DSL syn
 - Perl 5.x
 - [Clone](https://metacpan.org/pod/Clone)
 
+## Dependencies
+
+| Module | Source |
+|---|---|
+| [TableTools](https://github.com/darong37/TableTools) | Place `src/TableTools.pm` into `lib/` before running tests |
+
 ## Installation
 
 ```bash
