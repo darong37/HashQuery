@@ -34,3 +34,4 @@ bind.sh
 lib/
 .claude/worktrees/
 .claude/commands/
+.claude/settings.json
