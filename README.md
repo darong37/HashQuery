@@ -1,8 +1,10 @@
 # HashQuery
 
-Syntactic sugar for querying Perl AOH (Array of Hash) data with SQL-like DSL syntax. ([日本語版](README.ja.md)) The DSL closely mirrors SQL so that anyone familiar with SQL can read and write queries intuitively.
+Syntactic sugar for querying Perl AOH (Array of Hash) data with SQL-like DSL syntax. ([日本語版](README_ja.md)) The DSL closely mirrors SQL so that anyone familiar with SQL can read and write queries intuitively.
 
 `HashQuery->new(\@table)` creates an instance from an AOH table. `SELECT` / `DELETE` / `UPDATE` are called as instance methods. `where` filters rows individually; `having` filters based on aggregate conditions across the whole table, matching the SQL `WHERE` / `HAVING` distinction.
+
+TableTools-format arrays (with a leading meta element `{ '#' => { attrs, order } }`) are also accepted. When meta is present, `SELECT` returns a projected meta element, and `DELETE` / `UPDATE` return the original meta element unchanged.
 
 ## Requirements
 
@@ -48,6 +50,27 @@ my $result = $hq->SELECT(
 );
 ```
 
+### Meta-equipped input (TableTools format)
+
+```perl
+my $table = [
+    { '#' => { attrs => { name => 'str', score => 'num' }, order => [qw/name score/] } },
+    { name => 'alice', score => 90 },
+    { name => 'bob',   score => 75 },
+];
+
+my $hq = HashQuery->new($table);
+
+# SELECT projects meta to the output columns
+my $r = $hq->SELECT([qw/name/]);
+# $r->[0]{'#'} => { attrs => { name => 'str' }, order => ['name'] }
+# $r->[1]      => { name => 'alice' }
+
+# DELETE / UPDATE return the original meta unchanged
+my $r2 = $hq->DELETE(where { $_->{score} < 80 });
+# $r2->[0]{'#'} => { attrs => { name => 'str', score => 'num' }, order => [qw/name score/] }
+```
+
 See [docs/spec.md](docs/spec.md) for the full API reference.
 
 ## Features
@@ -57,15 +80,16 @@ See [docs/spec.md](docs/spec.md) for the full API reference.
 ```perl
 my $hq = HashQuery->new(\@table);
 my $hq = HashQuery->new(\@table, as $tbl);
+my $hq = HashQuery->new(\$meta_table);   # TableTools format accepted
 ```
 
 **Instance methods:**
 
 | Method | Role |
 |---|---|
-| `SELECT('*', ...)` | Column projection; rows matching `where` / `having` are returned |
-| `DELETE(...)` | Rows matching `where` / `having` are removed; remaining rows returned |
-| `UPDATE(\%set, ...)` | Rows matching `where` / `having` have their specified columns overwritten; all rows returned |
+| `SELECT('*', ...)` | Column projection; rows matching `where` / `having` are returned. Meta projected to output columns if present. |
+| `DELETE(...)` | Rows matching `where` / `having` are removed; remaining rows returned. Original meta preserved if present. |
+| `UPDATE(\%set, ...)` | Rows matching `where` / `having` have their specified columns overwritten; all rows returned. Original meta preserved if present. |
 
 **DSL helper functions:**
 
@@ -120,9 +144,9 @@ perl test/hashquery.t
 Output:
 
 ```
-1..60
+1..74
 ok 1 - as: { as => \$var } を返す
 ok 2 - except: { except => [...] } を返す
 ...
-ok 60 - 実用: スコア75以上かつチームに2人以上いるメンバーを取得
+ok 74 - UPDATE: プレーン入力は従来どおりメタなしで返る
 ```

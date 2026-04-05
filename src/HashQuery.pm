@@ -4,6 +4,7 @@ use strict;
 use warnings;
 
 use Clone qw(clone);
+use TableTools qw(detach attach);
 use Exporter 'import';
 
 our @EXPORT = qw(
@@ -26,7 +27,16 @@ sub new {
     die 'HashQuery->new requires an Array of Hash'
         unless ref $table eq 'ARRAY';
 
-    my @all = _check_cols($table);
+    my ($rows, $meta) = detach($table);
+
+    my @all;
+    if (@$rows) {
+        @all = _check_cols($rows);
+    } elsif ($meta && $meta->{'#'}{order}) {
+        @all = @{ $meta->{'#'}{order} };
+    } elsif ($meta && $meta->{'#'}{attrs}) {
+        @all = sort keys %{ $meta->{'#'}{attrs} };
+    }
 
     my $alias;
     if ($opts && ref $opts eq 'HASH') {
@@ -34,9 +44,10 @@ sub new {
     }
 
     return bless {
-        table => clone($table),
+        table => clone($rows),
         all   => \@all,
         alias => $alias,
+        meta  => $meta,
     }, $class;
 }
 
@@ -87,7 +98,15 @@ sub SELECT {
         };
     }
 
-    return $result;
+    my $out_meta;
+    if ($self->{meta}) {
+        my $base_attrs = $self->{meta}{'#'}{attrs} // {};
+        $out_meta = { '#' => {
+            attrs => { map { $_ => $base_attrs->{$_} } @$cols },
+            order => [@$cols],
+        }};
+    }
+    return attach($result, $out_meta);
 }
 
 sub DELETE {
@@ -119,7 +138,7 @@ sub DELETE {
         };
     }
 
-    return $result;
+    return attach($result, $self->{meta});
 }
 
 sub UPDATE {
@@ -159,7 +178,7 @@ sub UPDATE {
         };
     }
 
-    return $result;
+    return attach($result, $self->{meta});
 }
 
 sub as (\$) {

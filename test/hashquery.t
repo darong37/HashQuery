@@ -72,6 +72,11 @@ subtest 'except: 複数カラムを指定できる' => sub {
     is_deeply $node, { except => ['b', 'c'] };
 };
 
+subtest 'except: 引数なしで die する' => sub {
+    eval { except() };
+    like $@, qr/except requires at least one column name/;
+};
+
 subtest 'set: ハッシュリファレンスを返す' => sub {
     my $node = set(score => 99, grade => 'A');
     is_deeply $node, { score => 99, grade => 'A' };
@@ -522,6 +527,144 @@ subtest '実用: スコア75以上かつチームに2人以上いるメンバー
     );
     is scalar @$r, 3;
     is_deeply [sort map { $_->{name} } @$r], [qw/alice bob carol/];
+};
+
+# ===========================================================================
+# メタ情報付き配列対応
+# ===========================================================================
+
+my @meta_base = (
+    { '#' => { attrs => { a => 'str', b => 'num', c => 'num' }, order => [qw/a b c/] } },
+    { a => 'alice', b => 10, c => 100 },
+    { a => 'bob',   b => 20, c => 200 },
+    { a => 'carol', b => 30, c => 300 },
+);
+
+my @meta_empty_with_order = (
+    { '#' => { attrs => { a => 'str', b => 'num' }, order => [qw/a b/] } },
+);
+
+my @meta_empty_attrs_only = (
+    { '#' => { attrs => { x => 'num', y => 'str' } } },
+);
+
+subtest 'new: メタ付き配列を受け取れる' => sub {
+    my $hq = HashQuery->new(\@meta_base);
+    isa_ok $hq, 'HashQuery';
+};
+
+subtest 'new: メタ付き配列でカラム構成を正しく認識する' => sub {
+    my $hq = HashQuery->new(\@meta_base);
+    my $r = $hq->SELECT('*');
+    my @rows = grep { !exists $_->{'#'} } @$r;
+    is scalar @rows, 3;
+    ok  exists $rows[0]{a};
+};
+
+subtest 'new: rows が空でメタに order がある場合、列を復元できる' => sub {
+    my $hq = HashQuery->new(\@meta_empty_with_order);
+    isa_ok $hq, 'HashQuery';
+    my $r = $hq->SELECT('*');
+    my $m = $r->[0]{'#'};
+    ok defined $m, 'メタが付いている';
+    is_deeply $m->{order}, [qw/a b/], 'order から列が復元されている';
+    my @rows = @{$r}[1..$#$r];
+    is scalar @rows, 0, 'データ行は 0 件';
+};
+
+subtest 'new: rows が空でメタに attrs のみある場合、列を辞書順で復元できる' => sub {
+    my $hq = HashQuery->new(\@meta_empty_attrs_only);
+    isa_ok $hq, 'HashQuery';
+    my $r = $hq->SELECT('*');
+    my $m = $r->[0]{'#'};
+    ok defined $m, 'メタが付いている';
+    is_deeply $m->{order}, [qw/x y/], 'attrs キーの辞書順で列が復元されている';
+    my @rows = @{$r}[1..$#$r];
+    is scalar @rows, 0, 'データ行は 0 件';
+};
+
+subtest 'SELECT: メタ付き入力で * を指定すると全列の attrs/order が返る' => sub {
+    my $hq = HashQuery->new(\@meta_base);
+    my $r  = $hq->SELECT('*');
+    my $m  = $r->[0]{'#'};
+    ok defined $m, 'メタが付いている';
+    is_deeply $m->{order}, [qw/a b c/];
+    is_deeply $m->{attrs}, { a => 'str', b => 'num', c => 'num' };
+    my @rows = @{$r}[1..$#$r];
+    is scalar @rows, 3;
+};
+
+subtest 'SELECT: メタ付き入力で列を絞ると attrs/order が射影される' => sub {
+    my $hq = HashQuery->new(\@meta_base);
+    my $r  = $hq->SELECT([qw/a b/]);
+    my $m  = $r->[0]{'#'};
+    ok defined $m, 'メタが付いている';
+    is_deeply $m->{order}, [qw/a b/];
+    is_deeply $m->{attrs}, { a => 'str', b => 'num' };
+    ok !exists $m->{attrs}{c}, 'c は attrs に含まれない';
+};
+
+subtest 'SELECT: メタ付き入力で列順を入れ替えると order が返却列順に一致する' => sub {
+    my $hq = HashQuery->new(\@meta_base);
+    my $r  = $hq->SELECT([qw/b a/]);
+    my $m  = $r->[0]{'#'};
+    ok defined $m, 'メタが付いている';
+    is_deeply $m->{order}, [qw/b a/], 'order が返却列順 [b, a] と一致する';
+    is_deeply $m->{attrs}, { b => 'num', a => 'str' };
+    ok !exists $m->{attrs}{c}, 'c は attrs に含まれない';
+};
+
+subtest 'SELECT: メタ付き入力で except を使うと attrs/order が射影される' => sub {
+    my $hq = HashQuery->new(\@meta_base);
+    my $r  = $hq->SELECT(except('c'));
+    my $m  = $r->[0]{'#'};
+    ok defined $m, 'メタが付いている';
+    is_deeply $m->{order}, [qw/a b/];
+    is_deeply $m->{attrs}, { a => 'str', b => 'num' };
+    ok !exists $m->{attrs}{c}, 'c は attrs に含まれない';
+};
+
+subtest 'SELECT: プレーン入力は従来どおりメタなしで返る' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r  = $hq->SELECT('*');
+    ok !exists $r->[0]{'#'}, 'メタ行がない';
+    is scalar @$r, 5;
+};
+
+subtest 'DELETE: メタ付き入力は元メタをそのまま返す' => sub {
+    my $hq = HashQuery->new(\@meta_base);
+    my $r  = $hq->DELETE(where { $_->{b} == 10 });
+    my $m  = $r->[0]{'#'};
+    ok defined $m, 'メタが付いている';
+    is_deeply $m->{order}, [qw/a b c/];
+    is_deeply $m->{attrs}, { a => 'str', b => 'num', c => 'num' };
+    my @rows = @{$r}[1..$#$r];
+    is scalar @rows, 2;
+};
+
+subtest 'DELETE: プレーン入力は従来どおりメタなしで返る' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r  = $hq->DELETE(where { $_->{b} == 10 });
+    ok !exists $r->[0]{'#'}, 'メタ行がない';
+};
+
+subtest 'UPDATE: メタ付き入力は元メタをそのまま返す' => sub {
+    my $hq = HashQuery->new(\@meta_base);
+    my $r  = $hq->UPDATE({ b => 99 }, where { $_->{b} == 10 });
+    my $m  = $r->[0]{'#'};
+    ok defined $m, 'メタが付いている';
+    is_deeply $m->{order}, [qw/a b c/];
+    is_deeply $m->{attrs}, { a => 'str', b => 'num', c => 'num' };
+    my @rows = @{$r}[1..$#$r];
+    is scalar @rows, 3;
+    my @updated = grep { $_->{b} == 99 } @rows;
+    is scalar @updated, 1;
+};
+
+subtest 'UPDATE: プレーン入力は従来どおりメタなしで返る' => sub {
+    my $hq = HashQuery->new(\@base);
+    my $r  = $hq->UPDATE({ b => 99 }, where { $_->{b} == 10 });
+    ok !exists $r->[0]{'#'}, 'メタ行がない';
 };
 
 done_testing;
