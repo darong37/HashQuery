@@ -2,16 +2,17 @@
 
 ## 0. 設計原則
 
-HashQuery は、Perl の AOH（Array of Hash）をテーブルとして扱い、SQL に似た構文で操作するためのシンタックスシュガーである。DSL の構文は SQL をできるだけ忠実に模倣しており、SQL の知識がある開発者がそのまま直感的に読み書きできることを目指している。
+HashQuery は、Perl の AoH（ハッシュリファレンスの配列リファレンス）を単一対象として SQL 風に操作するためのシンタックスシュガーである。DSL の構文は SQL をできるだけ忠実に模倣しており、SQL の知識がある開発者がそのまま直感的に読み書きできることを目指している。
 
-オブジェクト指向 API として設計されており、`HashQuery->new(\@table)` でインスタンスを生成し、`SELECT` / `DELETE` / `UPDATE` をメソッドとして呼び出す。インスタンスは内部に clone した AOH を保持するため、同一インスタンスに対して複数回メソッドを呼び出しても互いに影響しない。
+オブジェクト指向 API として設計されており、`HashQuery->new(\@aoh)` でインスタンスを生成し、`SELECT` / `DELETE` / `UPDATE` をメソッドとして呼び出す。インスタンスは内部に clone した rows を保持するため、同一インスタンスに対して複数回メソッドを呼び出しても互いに影響しない。
 
-`where` と `having` の役割は明確に分離している。`where` は行単位のフィルター条件であり、現在行のみを見て評価する。`having` はテーブル全体を見た集約フィルターであり、重複排除・最大値・先頭行といった「全体の中での位置づけ」を条件にできる。この2つを分離することで、SQL の `WHERE` / `HAVING` の概念をそのまま Perl の構文として表現している。
+`where` と `having` の役割は明確に分離している。`where` は行フィルタであり、現在行のみを見て評価する。`having` は行列フィルタであり、重複排除・最大値・先頭行といった「全体の中での位置づけ」を条件にできる。この2つを分離することで、SQL の `WHERE` / `HAVING` の概念をそのまま Perl の構文として表現している。
 
 - 実行の起点は **`HashQuery->new`** によるインスタンス生成
 - `SELECT` / `DELETE` / `UPDATE` は **インスタンスメソッド**
 - `as` / `except` / `set` / `where` / `having` は **引数として渡す DSL ノード値**を返す関数
-- 入出力はすべて **AOH（Array of Hash）**
+- 入出力はすべて **AoH**
+- 出力は原則として常に **meta 付き AoH**。結果 rows が 0 件のときだけ例外として `[]` を返す
 - 外部エンジン・別実行層は存在しない
 - `from` / `group_by` / `distinct` は存在しない
 
@@ -23,7 +24,7 @@ HashQuery は、Perl の AOH（Array of Hash）をテーブルとして扱い、
 | `except` | DSL | `SELECT` の第一引数として除外するカラムを指定する |
 | `set` | DSL | `UPDATE` の第一引数として更新内容を key/value リストで記述するための syntax sugar |
 | `where` | DSL | 行フィルタ条件を指定する |
-| `having` | DSL | 集約フィルタ条件を指定する |
+| `having` | DSL | 行列フィルタ条件を指定する |
 
 ## 2. DSL 構文
 
@@ -40,7 +41,7 @@ sub having (&);
 **基本構文:**
 
 ```perl
-my $hq = HashQuery->new(\@table, as $tbl);
+my $hq = HashQuery->new(\@aoh, as $tbl);
 
 my $result = $hq->SELECT([qw/a b c/], where { ... }, having { ... });
 my $result = $hq->DELETE(where { ... });
@@ -54,35 +55,41 @@ my $result = $hq->UPDATE({ col => val }, where { ... });
 **シグネチャ:**
 
 ```perl
-my $hq = HashQuery->new(\@table);
-my $hq = HashQuery->new(\@table, as $tbl);
-my $hq = HashQuery->new(\@table, { as => \$tbl });
+my $hq = HashQuery->new(\@aoh);
+my $hq = HashQuery->new(\@aoh, as $tbl);
+my $hq = HashQuery->new(\@aoh, { as => \$tbl });
 ```
 
 **動作説明:**
 
-第一引数に AOH（必須）を受け取りインスタンスを生成する。TableTools 形式のメタ情報付き配列（先頭要素に `{ '#' => { attrs, order } }` を持つ配列）も受け取れる。内部で `detach` を呼び出してメタとデータ行を分離し、メタを `$self->{meta}` として保持する。データ行から `_check_cols` を実行して全カラムリストを保持する。データ行が空でメタに `order` または `attrs` が含まれる場合は、そこからカラムリストを復元する（`order` → `attrs` の辞書順の優先順）。元の AOH は `clone` してインスタンス内部に保持するため、元のデータは変更されない。第二引数にオプションのハッシュリファレンスを渡すことができ、現時点では `as` のみをサポートする。`as $tbl` は `{ as => \$tbl }` の syntax sugar。
+第一引数に AoH（必須）を受け取りインスタンスを生成する。プレーン AoH（meta なし）も meta 付き AoH（先頭要素に `{ '#' => { attrs, count, order } }` を持つ配列）も受け取れる。
 
-**メタ情報付き配列の形式:**
+入口で `TableTools::validate()` を通すことで meta を確定させ、その後 `detach()` で meta と rows を分離して内部保持する。これによりプレーン入力でも meta が生成され、`$self->{meta}` は常にセットされる。
+
+データ行が空のとき、`validate()` が空テーブルとして `[]` を返すため、meta は `$self->{meta}` から復元できる場合（`order` または `attrs` が存在する場合）にカラムリストを保持する（`order` → `attrs` の辞書順の優先順）。
+
+元の AoH は `clone` してインスタンス内部に保持するため、元のデータは変更されない。第二引数にオプションのハッシュリファレンスを渡すことができ、現時点では `as` のみをサポートする。`as $tbl` は `{ as => \$tbl }` の syntax sugar。
+
+**meta の形式:**
 
 ```perl
-# プレーン（従来形式）
-[ { a => 1, b => 'foo' }, { a => 2, b => 'bar' } ]
-
-# メタ付き（TableTools 形式）
-[
-    { '#' => { attrs => { a => 'num', b => 'str' }, order => ['a', 'b'] } },
-    { a => 1, b => 'foo' },
-    { a => 2, b => 'bar' },
-]
+{ '#' => {
+    attrs => { a => 'num', b => 'str' },
+    count => 2,
+    order => ['a', 'b'],
+}}
 ```
+
+- `attrs`: カラム名をキー、型情報（`'num'` / `'str'`）を値とするハッシュ
+- `count`: rows 件数（meta を除いた data 行の数）
+- `order`: カラム名の並びを表す配列リファレンス
 
 **エラー:**
 
 | 状況 | エラーメッセージ |
 |---|---|
-| 第一引数が AOH でない | `"HashQuery->new requires an Array of Hash"` |
-| テーブルのカラム構成が不一致 | `"table columns are not consistent"` |
+| 第一引数が AoH でない | `"HashQuery->new requires an Array of Hash"` |
+| rows のカラム構成が不一致 | `"table columns are not consistent"` |
 
 ### SELECT メソッド
 
@@ -97,11 +104,11 @@ $hq->SELECT(except('c', 'd'), where { ... })
 
 **動作説明:**
 
-第一引数（必須）で出力カラムを指定する。`'*'` は全列、配列リファレンスは明示指定、`except(...)` の戻り値は除外指定。`undef` は die する。第二引数以降に `where { }` / `having { }` を順不同で渡せる。戻り値は AOH（条件にマッチした行を指定列で射影したもの）。`_idx` は常に出力から除外される。
+第一引数（必須）で出力カラムを指定する。`'*'` は全列、配列リファレンスは明示指定、`except(...)` の戻り値は除外指定。`undef` は die する。第二引数以降に `where { }` / `having { }` を順不同で渡せる。`_idx` は常に出力から除外される。
 
-入力がメタ付き配列の場合、出力列に合わせて `attrs` / `order` を射影したメタ情報が先頭要素として付与される。プレーン入力の場合はメタなしで返す。
+戻り値は meta 付き AoH。出力列に合わせて `attrs` / `order` を射影した meta が先頭要素として付与される。結果 rows が 0 件のときだけ例外として `[]` を返す。
 
-`as` を指定した場合、完了後に `$tbl->{count}` = 結果行数、`$tbl->{affect}` = 結果行数（SELECT では同値）。
+`as` を指定した場合、完了後に alias 変数には `{ '#' => meta, affect => N }` 形式の hashref が格納される。`'#'->{count}` = 結果行数、`affect` = 結果行数（SELECT では同値）。
 
 **エラー:**
 
@@ -122,11 +129,11 @@ $hq->DELETE(where { ... }, having { ... })
 
 **動作説明:**
 
-引数（省略可）に `where { }` / `having { }` を順不同で渡せる。`where` / `having` にマッチした行を削除対象とし、残存行を AOH で返す。引数省略時は何も削除されず全行を返す。元のテーブルは変更しない。`SELECT` と対称的な操作であり、同じ条件で `SELECT` ↔ `DELETE` を差し替えることで削除対象の確認と実行を切り替えられる。
+引数（省略可）に `where { }` / `having { }` を順不同で渡せる。`where` / `having` にマッチした行を削除対象とし、残存 rows を meta 付き AoH で返す。引数省略時は何も削除されず全行を返す。元の AoH は変更しない。`SELECT` と対称的な操作であり、同じ条件で `SELECT` ↔ `DELETE` を差し替えることで削除対象の確認と実行を切り替えられる。
 
-入力がメタ付き配列の場合、元のメタ情報（列集合は変化しないため `attrs` / `order` はそのまま）が先頭要素として付与される。プレーン入力の場合はメタなしで返す。
+列集合は変化しないため、meta の `attrs` / `order` は元のものをそのまま付与する。結果 rows が 0 件のときだけ例外として `[]` を返す。
 
-`as` を指定した場合、完了後に `$tbl->{count}` = 残存行数、`$tbl->{affect}` = 削除行数。
+`as` を指定した場合、完了後に alias 変数には `{ '#' => meta, affect => N }` 形式の hashref が格納される。`'#'->{count}` = 残存行数、`affect` = 削除行数。
 
 ### UPDATE メソッド
 
@@ -140,11 +147,11 @@ $hq->UPDATE(set(col => val, ...), where { ... })
 
 **動作説明:**
 
-第一引数（必須）に更新内容のハッシュリファレンスまたは `set(...)` の戻り値を渡す。`where` / `having` にマッチした行の指定カラムを固定値で上書きし、全行（更新済み行・未更新行を含む）を AOH で返す。元のテーブルは変更しない。存在しないカラムを指定した場合は die する。
+第一引数（必須）に更新内容のハッシュリファレンスまたは `set(...)` の戻り値を渡す。`where` / `having` にマッチした行の指定カラムを固定値で上書きし、全行（更新済み行・未更新行を含む）を meta 付き AoH で返す。元の AoH は変更しない。存在しないカラムを指定した場合は die する。
 
-入力がメタ付き配列の場合、元のメタ情報（列集合は変化しないため `attrs` / `order` はそのまま）が先頭要素として付与される。プレーン入力の場合はメタなしで返す。
+列集合は変化しないため、meta の `attrs` / `order` は元のものをそのまま付与する。結果 rows が 0 件のときだけ例外として `[]` を返す。
 
-`as` を指定した場合、完了後に `$tbl->{count}` = 全行数、`$tbl->{affect}` = 更新行数。
+`as` を指定した場合、完了後に alias 変数には `{ '#' => meta, affect => N }` 形式の hashref が格納される。`'#'->{count}` = 全行数、`affect` = 更新行数。
 
 **エラー:**
 
@@ -171,21 +178,23 @@ as $var
 
 `new` の第二引数として渡すことで、`where` / `having` 内で現在行を参照するためのエイリアス変数を指定する。`as $tbl` と指定した場合、`where` / `having` の中で `$tbl->{col}` によって現在行のカラム値を参照できる。`as` を指定しない場合は `$_` で参照する。`as` を指定した場合も `$_` は同じ値を持つ。引数はスカラー変数への参照（`\$var` 形式）として受け取る。
 
-各メソッド完了後、指定した変数にはハッシュリファレンスが格納される:
+各メソッド完了後、指定した変数には `{ '#' => meta, affect => N }` 形式の hashref が格納される:
 
-| メソッド | `count` | `affect` |
+| メソッド | `'#'->{count}` | `affect` |
 |---|---|---|
 | `SELECT` | 結果行数 | 結果行数（count と同値） |
 | `DELETE` | 残存行数 | 削除行数 |
 | `UPDATE` | 全行数 | 更新行数 |
 
+結果 rows が 0 件のときも alias には hashref が格納される（`'#'->{count}` = 0）。
+
 **コード例:**
 
 ```perl
 our $tbl;
-my $hq = HashQuery->new(\@table, as $tbl);
+my $hq = HashQuery->new(\@aoh, as $tbl);
 my $r = $hq->SELECT('*', where { $tbl->{score} >= 80 });
-# $tbl->{count} には結果行数、$tbl->{affect} には変化行数が格納される
+# $tbl->{'#'}{count} には結果行数、$tbl->{affect} には変化行数が格納される
 ```
 
 ### except 関数
@@ -245,7 +254,7 @@ where { 条件式 };
 
 **動作説明:**
 
-Table を1行ずつ評価し、条件式が真の行のみを残す。`as` が指定されている場合はそのエイリアス変数が現在行を指す。`as` なしの場合は `$_` で参照する。`$tbl->{col}` や `$_->{col}` が返す値は `HashQuery::Value` のインスタンスであり、`like` / `between` / `in` などの条件メソッドを呼び出せる。
+rows を1行ずつ評価し、条件式が真の行のみを残す行フィルタ。`as` が指定されている場合はそのエイリアス変数が現在行を指す。`as` なしの場合は `$_` で参照する。`$tbl->{col}` や `$_->{col}` が返す値は `HashQuery::Value` のインスタンスであり、`like` / `between` / `in` などの条件メソッドを呼び出せる。
 
 ### having 関数
 
@@ -263,7 +272,7 @@ having { 条件式 };
 
 **動作説明:**
 
-`where` 後の Table を対象に行単位で条件を評価し、真の行のみを残す。`as` が指定されている場合はそのエイリアス変数が現在行を指す。集約関数（`count_by` / `max_by` / `min_by` / `first_by` / `last_by`）を条件式内で使用できる。集約対象は常に `where` 後の Table であり、元の Table ではない。
+`where` 後の rows を対象に行単位で条件を評価し、真の行のみを残す行列フィルタ。`as` が指定されている場合はそのエイリアス変数が現在行を指す。集約関数（`count_by` / `max_by` / `min_by` / `first_by` / `last_by`）を条件式内で使用できる。集約対象は常に `where` 後の rows であり、元の rows ではない。
 
 ## 4. 条件メソッド（where / having 共通）
 
@@ -344,7 +353,7 @@ grep_concat($col, $pattern, $start, $end)
 
 **動作説明:**
 
-現在行の `$col` カラム値が `$pattern` に一致した場合に、`$start` 〜 `$end` の範囲の行の `$col` カラム値を改行区切りで連結した文字列を返す。一致しない場合、または `$col` の値が `undef` / 空文字の場合は空文字を返す。連結する値は `$col` カラムのみであり、他カラムの値は含まれない。`$start` 〜 `$end` の範囲はテーブルの境界でクランプする。`where` ブロック外で呼び出した場合は die する。
+現在行の `$col` カラム値が `$pattern` に一致した場合に、`$start` 〜 `$end` の範囲の行の `$col` カラム値を改行区切りで連結した文字列を返す。一致しない場合、または `$col` の値が `undef` / 空文字の場合は空文字を返す。連結する値は `$col` カラムのみであり、他カラムの値は含まれない。`$start` 〜 `$end` の範囲は rows の境界でクランプする。`where` ブロック外で呼び出した場合は die する。
 
 **コード例:**
 
@@ -355,7 +364,7 @@ where { grep_concat('msg', qr/ERROR/, -1, 1) ne '' }
 
 ## 6. having 専用集計関数
 
-`having` ブロック内でのみ使用できる。ブロック外で呼び出した場合は die する。`HashQuery::HavingContext` に保持された現在行と `where` 後の Table を参照して動作する。
+`having` ブロック内でのみ使用できる。ブロック外で呼び出した場合は die する。`HashQuery::HavingContext` に保持された現在行と `where` 後の rows を参照して動作する。
 
 ### count_by
 
@@ -364,7 +373,7 @@ count_by($col1, $col2, ...)
 ```
 
 - 入力: グループキーとなる1個以上のカラム名（文字列リスト）
-- 戻り値: 現在行と同じグループキーを持つレコード数（整数）
+- 戻り値: 現在行と同じグループキーを持つ行数（整数）
 
 ### max_by
 
@@ -407,35 +416,39 @@ last_by($col1, $col2, ...)
 ### SELECT メソッド
 
 1. `SELECT` 引数から出力カラムリストを確定する
-2. DSL パーツ（`where` / `having`）を解釈する
-3. インスタンス内部テーブルを `clone` する
+2. `_filter_rows` で DSL パーツ（`where` / `having`）を解釈・適用する
+3. インスタンス内部 rows を `clone` する
 4. 各行への `_idx` 付加（0 始まりの行番号）
 5. `where` 評価（行フィルタ）
-6. `having` 評価（集約フィルタ）
-7. 列射影（`_idx` を除外して AOH 返却）
-8. `as` 変数に `{ count => N, affect => N }` を格納
+6. `having` 評価（行列フィルタ）
+7. 列射影（`_idx` を除外）
+8. 出力列に合わせて `attrs` / `order` を射影した meta を確定する
+9. `_build_result` で meta 付き AoH を組み立てる（`meta->{'#'}{count}` を結果行数にセット）
+10. `_set_alias` で alias 変数に `{ '#' => meta, affect => N }` を格納する
 
 ### DELETE メソッド
 
-1. DSL パーツを解釈する
-2. インスタンス内部テーブルを `clone` する
+1. `_filter_rows` で DSL パーツを解釈・適用し、削除対象 rows を特定する
+2. インスタンス内部 rows を `clone` する
 3. 各行への `_idx` 付加（0 始まりの行番号）
-4. `where` / `having` 評価（削除候補を特定）
-5. 削除対象行を除いた残存行を AOH として返す（`_idx` を除外）
-6. `as` 変数に `{ count => 残存行数, affect => 削除行数 }` を格納
+4. `where` / `having` 評価（行フィルタ・行列フィルタ）
+5. 削除対象行を除いた残存 rows を確定する
+6. 元の meta（`attrs` / `order` はそのまま）を使って `_build_result` で meta 付き AoH を組み立てる
+7. `_set_alias` で alias 変数に `{ '#' => meta, affect => 削除行数 }` を格納する
 
 条件なし（引数省略）の場合はステップ 4 をスキップし、全行を返す（何も削除しない）。
 
 ### UPDATE メソッド
 
 1. 更新内容のカラム名が全て既存カラムであることを検証（不正なら die）
-2. DSL パーツを解釈する
-3. インスタンス内部テーブルを `clone` する
+2. `_filter_rows` で DSL パーツを解釈・適用し、更新対象 rows を特定する
+3. インスタンス内部 rows を `clone` する
 4. 各行への `_idx` 付加（0 始まりの行番号）
-5. `where` / `having` 評価（更新候補を特定）
+5. `where` / `having` 評価（行フィルタ・行列フィルタ）
 6. 更新候補の各行に対して更新内容を代入
-7. 全行（更新済み行・未更新行を含む）を AOH として返す（`_idx` を除外）
-8. `as` 変数に `{ count => 全行数, affect => 更新行数 }` を格納
+7. 全行（更新済み行・未更新行を含む）を確定する
+8. 元の meta（`attrs` / `order` はそのまま）を使って `_build_result` で meta 付き AoH を組み立てる
+9. `_set_alias` で alias 変数に `{ '#' => meta, affect => 更新行数 }` を格納する
 
 ### 内部パッケージ
 
@@ -444,27 +457,27 @@ last_by($col1, $col2, ...)
 | `HashQuery` | インスタンス主体。`new`・`SELECT`・`DELETE`・`UPDATE` を提供する |
 | `HashQuery::RowHash` | `$tbl` / `$_` の実体。`tie` によるハッシュアクセスを提供し、カラム添字で `HashQuery::Value` を返す |
 | `HashQuery::Value` | カラム値を保持する値オブジェクト。条件メソッド・変換メソッドおよび数値/文字列/真偽値オーバーロードを持つ |
-| `HashQuery::WhereContext` | `where` 実行時の現在行と対象 Table を保持し、`grep_concat` に実行コンテキストを提供する |
-| `HashQuery::HavingContext` | `having` 実行時の現在行と `where` 後の Table を保持し、集約関数に計算コンテキストを提供する |
+| `HashQuery::WhereContext` | `where` 実行時の現在行と rows を保持し、`grep_concat` に実行コンテキストを提供する |
+| `HashQuery::HavingContext` | `having` 実行時の現在行と `where` 後の rows を保持し、集約関数に計算コンテキストを提供する |
 
 **外部依存:**
 
 | モジュール | 用途 |
 |---|---|
-| `Clone` | テーブルの深いコピー（内部データの隔離） |
-| `TableTools` | `detach`（メタとデータ行の分離）/ `attach`（メタの再付与） |
+| `Clone` | rows の深いコピー（内部データの隔離） |
+| `TableTools` | `validate`（meta の生成・検証）/ `detach`（meta と rows の分離）/ `attach`（meta の再付与） |
 
 ## 8. 制約・注意事項
 
-- `HashQuery->new` の第一引数は AOH でなければならない
-- 入力 Table の全行は同一のカラム構成を持つ必要がある（不一致の場合は die する）
+- `HashQuery->new` の第一引数は AoH でなければならない
+- 入力 AoH の全 rows は同一のカラム構成を持つ必要がある（不一致の場合は die する）
 - 同一インスタンスに対して `SELECT` / `DELETE` / `UPDATE` を複数回呼び出すことができる（互いに独立）
 - `count_by` / `max_by` / `min_by` / `first_by` / `last_by` は `having` ブロック外で呼ぶと die する
 - `grep_concat` は `where` ブロック外で呼ぶと die する。返す値は指定カラムのみであり、他カラムは含まれない
 - `as` に渡す変数は `our`（パッケージ変数）で宣言する必要がある（`my` では動作しない）
-- `having` の集約対象は `where` 後の Table であり、元の入力 Table ではない
+- `having` の集約対象は `where` 後の rows であり、元の入力 rows ではない
 - `_idx` カラムは最終出力に含まれない
-- `SELECT` / `DELETE` / `UPDATE` はすべて非破壊的操作（元テーブルを変更しない）
+- `SELECT` / `DELETE` / `UPDATE` はすべて非破壊的操作（元 AoH を変更しない）
 - `UPDATE` に存在しないカラムを指定した場合は die する
 - `UPDATE` は固定値のみサポート。動的な計算は呼び出し前に Perl 側で行う
 - `except` の引数が0個の場合は die する
