@@ -54,7 +54,6 @@ sub new {
 sub SELECT {
     my ($self, $cols_arg, @dsls) = @_;
 
-    # 列リストを確定する
     my $cols;
     if (!defined $cols_arg) {
         die "SELECT requires '*', arrayref, or except(...)";
@@ -73,30 +72,11 @@ sub SELECT {
         die "SELECT requires '*', arrayref, or except(...)";
     }
 
-    # DSL パーツを解釈する
-    my ($whr, $hvg);
-    for my $dsl (@dsls) {
-        if    (exists $dsl->{where})  { $whr = $dsl }
-        elsif (exists $dsl->{having}) { $hvg = $dsl }
-        else  { die 'invalid DSL part' }
-    }
-
-    # 実行
     my $org = clone($self->{table});
     for my $i (0 .. $#$org) { $org->[$i]{_idx} = $i; }
 
-    my $tbl = clone($org);
-    $tbl = _run_where($tbl, $self->{alias}, $whr) if $whr;
-    $tbl = _run_having($tbl, $self->{alias}, $hvg) if $hvg;
-
-    my $result = _run_select($tbl, $cols);
-
-    if ($self->{alias}) {
-        ${ $self->{alias} } = {
-            count  => scalar @$result,
-            affect => scalar @$result,
-        };
-    }
+    my $filtered = _filter_rows(clone($org), $self->{alias}, @dsls);
+    my $result   = _run_select($filtered, $cols);
 
     my $out_meta;
     if ($self->{meta}) {
@@ -106,39 +86,29 @@ sub SELECT {
             order => [@$cols],
         }};
     }
-    return attach($result, $out_meta);
+
+    my $result_aoh = _build_result($result, $out_meta);
+    my $alias_meta = $out_meta // { '#' => { count => scalar @$result } };
+    _set_alias($self->{alias}, $alias_meta, scalar @$result);
+
+    return $result_aoh;
 }
 
 sub DELETE {
     my ($self, @dsls) = @_;
 
-    my ($whr, $hvg);
-    for my $dsl (@dsls) {
-        if    (exists $dsl->{where})  { $whr = $dsl }
-        elsif (exists $dsl->{having}) { $hvg = $dsl }
-        else  { die 'invalid DSL part' }
-    }
-
     my $org = clone($self->{table});
     for my $i (0 .. $#$org) { $org->[$i]{_idx} = $i; }
 
-    my $tbl = [];
-    if ($whr || $hvg) {
-        $tbl = clone($org);
-        $tbl = _run_where($tbl, $self->{alias}, $whr) if $whr;
-        $tbl = _run_having($tbl, $self->{alias}, $hvg) if $hvg;
-    }
+    my $to_delete = @dsls ? _filter_rows(clone($org), $self->{alias}, @dsls) : [];
+    my $result    = _run_delete($org, $to_delete);
 
-    my $result = _run_delete($org, $tbl);
+    my $out_meta  = $self->{meta} ? { '#' => { %{$self->{meta}{'#'}} } } : undef;
+    my $result_aoh = _build_result($result, $out_meta);
+    my $alias_meta = $out_meta // { '#' => { count => scalar @$result } };
+    _set_alias($self->{alias}, $alias_meta, scalar @$to_delete);
 
-    if ($self->{alias}) {
-        ${ $self->{alias} } = {
-            count  => scalar @$result,
-            affect => scalar @$tbl,
-        };
-    }
-
-    return attach($result, $self->{meta});
+    return $result_aoh;
 }
 
 sub UPDATE {
@@ -155,30 +125,18 @@ sub UPDATE {
             unless $valid{$col};
     }
 
-    my ($whr, $hvg);
-    for my $dsl (@dsls) {
-        if    (exists $dsl->{where})  { $whr = $dsl }
-        elsif (exists $dsl->{having}) { $hvg = $dsl }
-        else  { die 'invalid DSL part' }
-    }
-
     my $org = clone($self->{table});
     for my $i (0 .. $#$org) { $org->[$i]{_idx} = $i; }
 
-    my $tbl = clone($org);
-    $tbl = _run_where($tbl, $self->{alias}, $whr) if $whr;
-    $tbl = _run_having($tbl, $self->{alias}, $hvg) if $hvg;
+    my $to_update = _filter_rows(clone($org), $self->{alias}, @dsls);
+    my $result    = _run_update($org, $to_update, \%upd_cols, $self->{all});
 
-    my $result = _run_update($org, $tbl, \%upd_cols, $self->{all});
+    my $out_meta  = $self->{meta} ? { '#' => { %{$self->{meta}{'#'}} } } : undef;
+    my $result_aoh = _build_result($result, $out_meta);
+    my $alias_meta = $out_meta // { '#' => { count => scalar @$result } };
+    _set_alias($self->{alias}, $alias_meta, scalar @$to_update);
 
-    if ($self->{alias}) {
-        ${ $self->{alias} } = {
-            count  => scalar @$result,
-            affect => scalar @$tbl,
-        };
-    }
-
-    return attach($result, $self->{meta});
+    return $result_aoh;
 }
 
 sub as (\$) {
@@ -288,6 +246,35 @@ sub _run_update {
     }
 
     return \@out;
+}
+
+sub _build_result {
+    my ($rows, $meta) = @_;
+    $meta->{'#'}{count} = scalar @$rows if $meta;
+    return [] unless @$rows || $meta;  # meta のみでも attach でメタ行を返す
+    return attach($rows, $meta);
+}
+
+sub _set_alias {
+    my ($alias, $meta, $affect) = @_;
+    return unless $alias;
+    $$alias = {
+        '#'    => $meta->{'#'},
+        affect => $affect,
+    };
+}
+
+sub _filter_rows {
+    my ($rows, $alias, @dsls) = @_;
+    my ($whr, $hvg);
+    for my $dsl (@dsls) {
+        if    (exists $dsl->{where})  { $whr = $dsl }
+        elsif (exists $dsl->{having}) { $hvg = $dsl }
+        else  { die 'invalid DSL part' }
+    }
+    $rows = _run_where($rows, $alias, $whr) if $whr;
+    $rows = _run_having($rows, $alias, $hvg) if $hvg;
+    return $rows;
 }
 
 sub _check_cols {

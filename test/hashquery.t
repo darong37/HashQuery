@@ -210,7 +210,7 @@ subtest 'SELECT: as で count/affect が返る' => sub {
     our $s1;
     my $hq = HashQuery->new(\@base, as $s1);
     $hq->SELECT('*', where { $_->{b} == 10 });
-    is $s1->{count},  2;
+    is $s1->{'#'}{count},  2;
     is $s1->{affect}, 2;
 };
 
@@ -228,6 +228,15 @@ subtest 'SELECT: 元テーブルは変更されない' => sub {
     my $hq = HashQuery->new(\@orig);
     $hq->SELECT('*');
     is_deeply \@orig, \@copy;
+};
+
+subtest 'SELECT: as - 結果が 0 件でも alias は hashref を返す' => sub {
+    our $s_zero;
+    my $hq = HashQuery->new(\@base, as $s_zero);
+    $hq->SELECT('*', where { $_->{b} > 9999 });
+    is ref($s_zero), 'HASH';
+    is $s_zero->{'#'}{count}, 0;
+    is $s_zero->{affect}, 0;
 };
 
 # ===========================================================================
@@ -279,7 +288,7 @@ subtest 'DELETE: as で count/affect が返る' => sub {
     our $d1;
     my $hq = HashQuery->new(\@base, as $d1);
     $hq->DELETE(where { $_->{b} == 10 });
-    is $d1->{count},  3;
+    is $d1->{'#'}{count},  3;
     is $d1->{affect}, 2;
 };
 
@@ -288,6 +297,15 @@ subtest 'DELETE: SELECT と対称動作する' => sub {
     my $selected = $hq->SELECT('*', where { $_->{b} == 10 });
     my $deleted  = $hq->DELETE(where { $_->{b} == 10 });
     is scalar @$selected + scalar @$deleted, 5;
+};
+
+subtest 'DELETE: as - 全件削除で結果 0 件でも alias は hashref を返す' => sub {
+    our $d_zero;
+    my $hq = HashQuery->new(\@base, as $d_zero);
+    $hq->DELETE(where { $_->{b} >= 0 });
+    is ref($d_zero), 'HASH';
+    is $d_zero->{'#'}{count}, 0;
+    is $d_zero->{affect}, 5;
 };
 
 # ===========================================================================
@@ -362,7 +380,7 @@ subtest 'UPDATE: as で count/affect が返る' => sub {
     our $u1;
     my $hq = HashQuery->new(\@base, as $u1);
     $hq->UPDATE({ b => 0 }, where { $_->{b} == 10 });
-    is $u1->{count},  5;
+    is $u1->{'#'}{count},  5;
     is $u1->{affect}, 2;
 };
 
