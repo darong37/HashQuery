@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use Clone qw(clone);
-use TableTools qw(detach attach);
+use TableTools qw(validate detach attach);
 use Exporter 'import';
 
 our @EXPORT = qw(
@@ -22,29 +22,46 @@ our @EXPORT = qw(
 );
 
 sub new {
-    my ($class, $table, $opts) = @_;
+    my ($class, $aoh, $as_dsl) = @_;
 
     die 'HashQuery->new requires an Array of Hash'
-        unless ref $table eq 'ARRAY';
+        unless ref $aoh eq 'ARRAY';
 
-    my ($rows, $meta) = detach($table);
+    my $alias;
+    if ($as_dsl && ref $as_dsl eq 'HASH') {
+        $alias = $as_dsl->{as};
+    }
+
+    my $validated = validate($aoh);
+    if (!@$validated) {
+        return bless {
+            rows  => [],
+            all   => [],
+            alias => $alias,
+            meta  => {
+                '#' => {
+                    attrs => {},
+                    count => 0,
+                },
+            },
+        }, $class;
+    }
+
+    my ($rows, $meta) = detach($validated);
+    die 'UNEXPECTED ERROR: validate() returned rows without meta'
+        unless $meta;
 
     my @all;
     if (@$rows) {
         @all = _check_cols($rows);
-    } elsif ($meta && $meta->{'#'}{order}) {
+    } elsif ($meta->{'#'}{order}) {
         @all = @{ $meta->{'#'}{order} };
-    } elsif ($meta && $meta->{'#'}{attrs}) {
+    } elsif ($meta->{'#'}{attrs}) {
         @all = sort keys %{ $meta->{'#'}{attrs} };
     }
 
-    my $alias;
-    if ($opts && ref $opts eq 'HASH') {
-        $alias = $opts->{as};
-    }
-
     return bless {
-        table => clone($rows),
+        rows  => clone($rows),
         all   => \@all,
         alias => $alias,
         meta  => $meta,
@@ -52,63 +69,60 @@ sub new {
 }
 
 sub SELECT {
-    my ($self, $cols_arg, @dsls) = @_;
-
+    my ($self, $cols_expr, @dsls) = @_;
+    # cols_expr は '*'、配列リファレンス、except(...) のいずれか
     my $cols;
-    if (!defined $cols_arg) {
+    if (!defined $cols_expr) {
         die "SELECT requires '*', arrayref, or except(...)";
     }
-    elsif (!ref $cols_arg && $cols_arg eq '*') {
+    elsif (!ref $cols_expr && $cols_expr eq '*') {
         $cols = $self->{all};
     }
-    elsif (ref $cols_arg eq 'ARRAY') {
-        $cols = $cols_arg;
+    elsif (ref $cols_expr eq 'ARRAY') {
+        $cols = $cols_expr;
     }
-    elsif (ref $cols_arg eq 'HASH' && exists $cols_arg->{except}) {
-        my %skip = map { $_ => 1 } @{ $cols_arg->{except} };
+    elsif (ref $cols_expr eq 'HASH' && exists $cols_expr->{except}) {
+        my %skip = map { $_ => 1 } @{ $cols_expr->{except} };
         $cols = [ grep { !$skip{$_} } @{ $self->{all} } ];
     }
     else {
         die "SELECT requires '*', arrayref, or except(...)";
     }
 
-    my $org = clone($self->{table});
+    my $org = clone($self->{rows});
     for my $i (0 .. $#$org) { $org->[$i]{_idx} = $i; }
 
     my $filtered = _filter_rows(clone($org), $self->{alias}, @dsls);
     my $result   = _run_select($filtered, $cols);
 
-    my $out_meta;
-    if ($self->{meta}) {
-        my $base_attrs = $self->{meta}{'#'}{attrs} // {};
-        $out_meta = { '#' => {
-            attrs => { map { $_ => $base_attrs->{$_} } @$cols },
-            order => [@$cols],
-        }};
-    }
+    die 'UNEXPECTED ERROR: meta is missing'
+        unless $self->{meta} && $self->{meta}{'#'};
 
-    my $result_aoh = _build_result($result, $out_meta);
-    my $alias_meta = $out_meta // { '#' => { count => scalar @$result } };
-    _set_alias($self->{alias}, $alias_meta, scalar @$result);
+    my $meta = { '#' => { %{ $self->{meta}{'#'} } } };
+    _set_meta_count($meta, $result);
+    _set_meta_attrs($meta, $cols);
+    _set_alias($self->{alias}, scalar @$result, scalar @$result);
 
-    return $result_aoh;
+    return _build_return($result, $meta);
 }
 
 sub DELETE {
     my ($self, @dsls) = @_;
 
-    my $org = clone($self->{table});
+    my $org = clone($self->{rows});
     for my $i (0 .. $#$org) { $org->[$i]{_idx} = $i; }
 
     my $to_delete = @dsls ? _filter_rows(clone($org), $self->{alias}, @dsls) : [];
     my $result    = _run_delete($org, $to_delete);
 
-    my $out_meta  = $self->{meta} ? { '#' => { %{$self->{meta}{'#'}} } } : undef;
-    my $result_aoh = _build_result($result, $out_meta);
-    my $alias_meta = $out_meta // { '#' => { count => scalar @$result } };
-    _set_alias($self->{alias}, $alias_meta, scalar @$to_delete);
+    die 'UNEXPECTED ERROR: meta is missing'
+        unless $self->{meta} && $self->{meta}{'#'};
 
-    return $result_aoh;
+    my $meta = { '#' => { %{ $self->{meta}{'#'} } } };
+    _set_meta_count($meta, $result);
+    _set_alias($self->{alias}, scalar @$result, scalar @$to_delete);
+
+    return _build_return($result, $meta);
 }
 
 sub UPDATE {
@@ -125,18 +139,20 @@ sub UPDATE {
             unless $valid{$col};
     }
 
-    my $org = clone($self->{table});
+    my $org = clone($self->{rows});
     for my $i (0 .. $#$org) { $org->[$i]{_idx} = $i; }
 
     my $to_update = _filter_rows(clone($org), $self->{alias}, @dsls);
     my $result    = _run_update($org, $to_update, \%upd_cols, $self->{all});
 
-    my $out_meta  = $self->{meta} ? { '#' => { %{$self->{meta}{'#'}} } } : undef;
-    my $result_aoh = _build_result($result, $out_meta);
-    my $alias_meta = $out_meta // { '#' => { count => scalar @$result } };
-    _set_alias($self->{alias}, $alias_meta, scalar @$to_update);
+    die 'UNEXPECTED ERROR: meta is missing'
+        unless $self->{meta} && $self->{meta}{'#'};
 
-    return $result_aoh;
+    my $meta = { '#' => { %{ $self->{meta}{'#'} } } };
+    _set_meta_count($meta, $result);
+    _set_alias($self->{alias}, scalar @$result, scalar @$to_update);
+
+    return _build_return($result, $meta);
 }
 
 sub as (\$) {
@@ -248,20 +264,34 @@ sub _run_update {
     return \@out;
 }
 
-sub _build_result {
-    my ($rows, $meta) = @_;
+sub _set_meta_count {
+    my ($meta, $rows) = @_;
     $meta->{'#'}{count} = scalar @$rows if $meta;
-    return [] unless @$rows || $meta;  # meta のみでも attach でメタ行を返す
-    return attach($rows, $meta);
+}
+
+sub _set_meta_attrs {
+    my ($meta, $cols) = @_;
+
+    return unless $meta;
+
+    my $attrs = $meta->{'#'}{attrs} // {};
+    $meta->{'#'}{attrs} = { map { $_ => $attrs->{$_} } @$cols };
+    $meta->{'#'}{order} = [@$cols];
 }
 
 sub _set_alias {
-    my ($alias, $meta, $affect) = @_;
+    my ($alias, $count, $affect) = @_;
     return unless $alias;
     $$alias = {
-        '#'    => $meta->{'#'},
+        count  => $count,
         affect => $affect,
     };
+}
+
+sub _build_return {
+    my ($rows, $meta) = @_;
+    return [] unless @$rows;
+    return attach($rows, $meta);
 }
 
 sub _filter_rows {

@@ -66,7 +66,7 @@ my $hq = HashQuery->new(\@aoh, { as => \$tbl });
 
 入口で `TableTools::validate()` を通すことで meta を確定させ、その後 `detach()` で meta と rows を分離して内部保持する。これによりプレーン入力でも meta が生成され、`$self->{meta}` は常にセットされる。
 
-データ行が空のとき、`validate()` が空テーブルとして `[]` を返すため、meta は `$self->{meta}` から復元できる場合（`order` または `attrs` が存在する場合）にカラムリストを保持する（`order` → `attrs` の辞書順の優先順）。
+データ行が空のとき（`validate()` が `[]` を返したとき）、インスタンスは `rows = []`、`all = []`、`meta = { '#' => { attrs => {}, count => 0 } }` の最小構成で即座に生成される。入力に meta が付いていてもカラムリストの復元は行わない。`SELECT('*')` の結果は `[]` になる。
 
 元の AoH は `clone` してインスタンス内部に保持するため、元のデータは変更されない。第二引数にオプションのハッシュリファレンスを渡すことができ、現時点では `as` のみをサポートする。`as $tbl` は `{ as => \$tbl }` の syntax sugar。
 
@@ -89,7 +89,8 @@ my $hq = HashQuery->new(\@aoh, { as => \$tbl });
 | 状況 | エラーメッセージ |
 |---|---|
 | 第一引数が AoH でない | `"HashQuery->new requires an Array of Hash"` |
-| rows のカラム構成が不一致 | `"table columns are not consistent"` |
+| rows のカラム構成が不一致 | `TableTools::validate()` が die する（例: `column count mismatch`, `unexpected column`） |
+| `validate()` が空集合以外を返したのに meta がない | `"UNEXPECTED ERROR: validate() returned rows without meta"`（論理的にありえない内部エラー） |
 
 ### SELECT メソッド
 
@@ -108,7 +109,7 @@ $hq->SELECT(except('c', 'd'), where { ... })
 
 戻り値は meta 付き AoH。出力列に合わせて `attrs` / `order` を射影した meta が先頭要素として付与される。結果 rows が 0 件のときだけ例外として `[]` を返す。
 
-`as` を指定した場合、完了後に alias 変数には `{ '#' => meta, affect => N }` 形式の hashref が格納される。`'#'->{count}` = 結果行数、`affect` = 結果行数（SELECT では同値）。
+`as` を指定した場合、完了後に alias 変数には `{ count => N, affect => N }` 形式の hashref が格納される。`count` = 結果行数、`affect` = 結果行数（SELECT では同値）。
 
 **エラー:**
 
@@ -133,7 +134,7 @@ $hq->DELETE(where { ... }, having { ... })
 
 列集合は変化しないため、meta の `attrs` / `order` は元のものをそのまま付与する。結果 rows が 0 件のときだけ例外として `[]` を返す。
 
-`as` を指定した場合、完了後に alias 変数には `{ '#' => meta, affect => N }` 形式の hashref が格納される。`'#'->{count}` = 残存行数、`affect` = 削除行数。
+`as` を指定した場合、完了後に alias 変数には `{ count => N, affect => N }` 形式の hashref が格納される。`count` = 残存行数、`affect` = 削除行数。
 
 ### UPDATE メソッド
 
@@ -151,7 +152,7 @@ $hq->UPDATE(set(col => val, ...), where { ... })
 
 列集合は変化しないため、meta の `attrs` / `order` は元のものをそのまま付与する。結果 rows が 0 件のときだけ例外として `[]` を返す。
 
-`as` を指定した場合、完了後に alias 変数には `{ '#' => meta, affect => N }` 形式の hashref が格納される。`'#'->{count}` = 全行数、`affect` = 更新行数。
+`as` を指定した場合、完了後に alias 変数には `{ count => N, affect => N }` 形式の hashref が格納される。`count` = 全行数、`affect` = 更新行数。
 
 **エラー:**
 
@@ -178,15 +179,15 @@ as $var
 
 `new` の第二引数として渡すことで、`where` / `having` 内で現在行を参照するためのエイリアス変数を指定する。`as $tbl` と指定した場合、`where` / `having` の中で `$tbl->{col}` によって現在行のカラム値を参照できる。`as` を指定しない場合は `$_` で参照する。`as` を指定した場合も `$_` は同じ値を持つ。引数はスカラー変数への参照（`\$var` 形式）として受け取る。
 
-各メソッド完了後、指定した変数には `{ '#' => meta, affect => N }` 形式の hashref が格納される:
+各メソッド完了後、指定した変数には `{ count => N, affect => N }` 形式の hashref が格納される:
 
-| メソッド | `'#'->{count}` | `affect` |
+| メソッド | `count` | `affect` |
 |---|---|---|
 | `SELECT` | 結果行数 | 結果行数（count と同値） |
 | `DELETE` | 残存行数 | 削除行数 |
 | `UPDATE` | 全行数 | 更新行数 |
 
-結果 rows が 0 件のときも alias には hashref が格納される（`'#'->{count}` = 0）。
+結果 rows が 0 件のときも alias には hashref が格納される（`count` = 0）。
 
 **コード例:**
 
@@ -194,7 +195,7 @@ as $var
 our $tbl;
 my $hq = HashQuery->new(\@aoh, as $tbl);
 my $r = $hq->SELECT('*', where { $tbl->{score} >= 80 });
-# $tbl->{'#'}{count} には結果行数、$tbl->{affect} には変化行数が格納される
+# $tbl->{count} には結果行数、$tbl->{affect} には変化行数が格納される
 ```
 
 ### except 関数
@@ -416,39 +417,36 @@ last_by($col1, $col2, ...)
 ### SELECT メソッド
 
 1. `SELECT` 引数から出力カラムリストを確定する
-2. `_filter_rows` で DSL パーツ（`where` / `having`）を解釈・適用する
-3. インスタンス内部 rows を `clone` する
-4. 各行への `_idx` 付加（0 始まりの行番号）
-5. `where` 評価（行フィルタ）
-6. `having` 評価（行列フィルタ）
-7. 列射影（`_idx` を除外）
-8. 出力列に合わせて `attrs` / `order` を射影した meta を確定する
-9. `_build_result` で meta 付き AoH を組み立てる（`meta->{'#'}{count}` を結果行数にセット）
-10. `_set_alias` で alias 変数に `{ '#' => meta, affect => N }` を格納する
+2. インスタンス内部 rows を `clone` する
+3. 各行への `_idx` 付加（0 始まりの行番号）
+4. `_filter_rows` で `where` / `having` を適用する
+5. 列射影（`_idx` を除外）
+6. `_set_meta_count` で meta の `count` を結果行数にセットする
+7. `_set_meta_attrs` で出力列に合わせて `attrs` / `order` を射影する
+8. `_set_alias` で alias 変数に `{ count => N, affect => N }` を格納する
+9. `_build_return` で meta 付き AoH を組み立てて返す（0 件なら `[]`）
 
 ### DELETE メソッド
 
-1. `_filter_rows` で DSL パーツを解釈・適用し、削除対象 rows を特定する
-2. インスタンス内部 rows を `clone` する
-3. 各行への `_idx` 付加（0 始まりの行番号）
-4. `where` / `having` 評価（行フィルタ・行列フィルタ）
-5. 削除対象行を除いた残存 rows を確定する
-6. 元の meta（`attrs` / `order` はそのまま）を使って `_build_result` で meta 付き AoH を組み立てる
-7. `_set_alias` で alias 変数に `{ '#' => meta, affect => 削除行数 }` を格納する
-
-条件なし（引数省略）の場合はステップ 4 をスキップし、全行を返す（何も削除しない）。
+1. インスタンス内部 rows を `clone` する
+2. 各行への `_idx` 付加（0 始まりの行番号）
+3. `_filter_rows` で削除対象 rows を特定する（引数省略時はスキップ）
+4. 削除対象行を除いた残存 rows を確定する
+5. `_set_meta_count` で meta の `count` を残存行数にセットする
+6. `_set_alias` で alias 変数に `{ count => N, affect => 削除行数 }` を格納する
+7. `_build_return` で meta 付き AoH を組み立てて返す（0 件なら `[]`）
 
 ### UPDATE メソッド
 
 1. 更新内容のカラム名が全て既存カラムであることを検証（不正なら die）
-2. `_filter_rows` で DSL パーツを解釈・適用し、更新対象 rows を特定する
-3. インスタンス内部 rows を `clone` する
-4. 各行への `_idx` 付加（0 始まりの行番号）
-5. `where` / `having` 評価（行フィルタ・行列フィルタ）
-6. 更新候補の各行に対して更新内容を代入
-7. 全行（更新済み行・未更新行を含む）を確定する
-8. 元の meta（`attrs` / `order` はそのまま）を使って `_build_result` で meta 付き AoH を組み立てる
-9. `_set_alias` で alias 変数に `{ '#' => meta, affect => 更新行数 }` を格納する
+2. インスタンス内部 rows を `clone` する
+3. 各行への `_idx` 付加（0 始まりの行番号）
+4. `_filter_rows` で更新対象 rows を特定する
+5. 更新候補の各行に対して更新内容を代入
+6. 全行（更新済み行・未更新行を含む）を確定する
+7. `_set_meta_count` で meta の `count` を全行数にセットする
+8. `_set_alias` で alias 変数に `{ count => N, affect => 更新行数 }` を格納する
+9. `_build_return` で meta 付き AoH を組み立てて返す（0 件なら `[]`）
 
 ### 内部パッケージ
 

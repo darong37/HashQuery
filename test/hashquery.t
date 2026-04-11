@@ -7,6 +7,37 @@ use lib "$Bin/../src";
 
 use HashQuery;
 
+sub data_rows {
+    my ($aoh) = @_;
+    return [ grep { !exists $_->{'#'} } @$aoh ];
+}
+
+sub meta_row {
+    my ($aoh) = @_;
+    return undef unless @$aoh;
+    return $aoh->[0]{'#'} ? $aoh->[0] : undef;
+}
+
+sub assert_result_meta {
+    my ($aoh, $expected_count, $expected_attrs, $expected_order) = @_;
+
+    my $meta_row = meta_row($aoh);
+    ok defined $meta_row, 'メタ行がある';
+    ok exists $meta_row->{'#'}{attrs}, 'attrs がある';
+    ok exists $meta_row->{'#'}{count}, 'count がある';
+    is $meta_row->{'#'}{count}, $expected_count, 'count が正しい';
+
+    if ($expected_attrs) {
+        is_deeply $meta_row->{'#'}{attrs}, $expected_attrs, 'attrs が正しい';
+    }
+
+    if ($expected_order) {
+        is_deeply $meta_row->{'#'}{order}, $expected_order, 'order が正しい';
+    }
+
+    return $meta_row->{'#'};
+}
+
 # ===========================================================================
 # テストデータ
 # ===========================================================================
@@ -50,6 +81,15 @@ my @members = (
     { team => 'gamma', name => 'frank', role => 'lead',   score => 95 },
     { team => 'gamma', name => 'grace', role => 'member', score => 60 },
 );
+
+my $base_attrs    = { a => 'str', b => 'num', c => 'num' };
+my $base_ab_attrs = { a => 'str', b => 'num' };
+my $base_a_attrs  = { a => 'str' };
+my $team_name_score_attrs = { team => 'str', name => 'str', score => 'num' };
+my $team_name_attrs       = { team => 'str', name => 'str' };
+my $log_attrs   = { line => 'num', msg => 'str' };
+my $null_attrs  = { name => 'str', val => 'num' };
+my $member_attrs = { team => 'str', name => 'str', role => 'str', score => 'num' };
 
 # ===========================================================================
 # as / except / set
@@ -102,7 +142,7 @@ subtest 'new: 配列リファレンス以外を渡すと die する' => sub {
 subtest 'new: カラム構成が不一致だと die する' => sub {
     my @bad = ({ a => 1 }, { b => 2 });
     eval { HashQuery->new(\@bad) };
-    like $@, qr/table columns are not consistent/;
+    like $@, qr/column|unexpected column|count mismatch/;
 };
 
 subtest 'new: 元テーブルを変更しない' => sub {
@@ -136,42 +176,51 @@ subtest 'new: 空テーブルでインスタンスを生成できる' => sub {
 subtest 'SELECT: * で全列・全行を返す' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*');
-    is scalar @$r, 5;
-    ok exists $r->[0]{a};
-    ok exists $r->[0]{b};
-    ok exists $r->[0]{c};
+    my $rows = data_rows($r);
+    assert_result_meta($r, 5, $base_attrs);
+    is scalar @$rows, 5;
+    ok exists $rows->[0]{a};
+    ok exists $rows->[0]{b};
+    ok exists $rows->[0]{c};
 };
 
 subtest 'SELECT: 配列リファレンスで列を指定できる' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT([qw/a b/]);
-    is scalar @$r, 5;
-    ok  exists $r->[0]{a};
-    ok  exists $r->[0]{b};
-    ok !exists $r->[0]{c};
+    my $rows = data_rows($r);
+    assert_result_meta($r, 5, $base_ab_attrs, [qw/a b/]);
+    is scalar @$rows, 5;
+    ok  exists $rows->[0]{a};
+    ok  exists $rows->[0]{b};
+    ok !exists $rows->[0]{c};
 };
 
 subtest 'SELECT: except で列を除外できる' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT(except('c'));
-    is scalar @$r, 5;
-    ok  exists $r->[0]{a};
-    ok  exists $r->[0]{b};
-    ok !exists $r->[0]{c};
+    my $rows = data_rows($r);
+    assert_result_meta($r, 5, $base_ab_attrs, [qw/a b/]);
+    is scalar @$rows, 5;
+    ok  exists $rows->[0]{a};
+    ok  exists $rows->[0]{b};
+    ok !exists $rows->[0]{c};
 };
 
 subtest 'SELECT: except で複数列を除外できる' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT(except('b', 'c'));
-    ok  exists $r->[0]{a};
-    ok !exists $r->[0]{b};
-    ok !exists $r->[0]{c};
+    my $rows = data_rows($r);
+    assert_result_meta($r, 5, $base_a_attrs, ['a']);
+    ok  exists $rows->[0]{a};
+    ok !exists $rows->[0]{b};
+    ok !exists $rows->[0]{c};
 };
 
 subtest 'SELECT: _idx は出力に含まれない' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*');
-    ok !exists $r->[0]{_idx};
+    my $rows = data_rows($r);
+    ok !exists $rows->[0]{_idx};
 };
 
 subtest 'SELECT: undef を渡すと die する' => sub {
@@ -183,16 +232,20 @@ subtest 'SELECT: undef を渡すと die する' => sub {
 subtest 'SELECT: where で行をフィルタできる' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*', where { $_->{b} == 10 });
-    is scalar @$r, 2;
-    my @names = sort map { $_->{a} } @$r;
+    my $rows = data_rows($r);
+    assert_result_meta($r, 2, $base_attrs);
+    is scalar @$rows, 2;
+    my @names = sort map { $_->{a} } @$rows;
     is_deeply \@names, [qw/alice dave/];
 };
 
 subtest 'SELECT: having で集約フィルタできる' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*', having { count_by('b') > 1 });
-    is scalar @$r, 4;
-    ok !grep { $_->{a} eq 'carol' } @$r;
+    my $rows = data_rows($r);
+    assert_result_meta($r, 4, $base_attrs);
+    is scalar @$rows, 4;
+    ok !grep { $_->{a} eq 'carol' } @$rows;
 };
 
 subtest 'SELECT: where と having を組み合わせられる' => sub {
@@ -202,15 +255,17 @@ subtest 'SELECT: where と having を組み合わせられる' => sub {
         where  { $_->{score} >= 75 },
         having { count_by('team') >= 2 },
     );
-    is scalar @$r, 3;
-    ok !grep { $_->{team} ne 'alpha' } @$r;
+    my $rows = data_rows($r);
+    assert_result_meta($r, 3, $team_name_score_attrs, [qw/team name score/]);
+    is scalar @$rows, 3;
+    ok !grep { $_->{team} ne 'alpha' } @$rows;
 };
 
 subtest 'SELECT: as で count/affect が返る' => sub {
     our $s1;
     my $hq = HashQuery->new(\@base, as $s1);
     $hq->SELECT('*', where { $_->{b} == 10 });
-    is $s1->{'#'}{count},  2;
+    is $s1->{count},  2;
     is $s1->{affect}, 2;
 };
 
@@ -218,8 +273,8 @@ subtest 'SELECT: 同じインスタンスを複数回呼べる' => sub {
     my $hq = HashQuery->new(\@base);
     my $r1 = $hq->SELECT('*', where { $_->{b} == 10 });
     my $r2 = $hq->SELECT('*', where { $_->{b} == 20 });
-    is scalar @$r1, 2;
-    is scalar @$r2, 2;
+    is scalar @{ data_rows($r1) }, 2;
+    is scalar @{ data_rows($r2) }, 2;
 };
 
 subtest 'SELECT: 元テーブルは変更されない' => sub {
@@ -235,7 +290,7 @@ subtest 'SELECT: as - 結果が 0 件でも alias は hashref を返す' => sub 
     my $hq = HashQuery->new(\@base, as $s_zero);
     $hq->SELECT('*', where { $_->{b} > 9999 });
     is ref($s_zero), 'HASH';
-    is $s_zero->{'#'}{count}, 0;
+    is $s_zero->{count}, 0;
     is $s_zero->{affect}, 0;
 };
 
@@ -246,34 +301,41 @@ subtest 'SELECT: as - 結果が 0 件でも alias は hashref を返す' => sub 
 subtest 'DELETE: where にマッチした行を削除して残りを返す' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->DELETE(where { $_->{b} == 10 });
-    is scalar @$r, 3;
-    my @names = sort map { $_->{a} } @$r;
+    my $rows = data_rows($r);
+    assert_result_meta($r, 3, $base_attrs);
+    is scalar @$rows, 3;
+    my @names = sort map { $_->{a} } @$rows;
     is_deeply \@names, [qw/bob carol eve/];
 };
 
 subtest 'DELETE: 条件なしで全行を返す（何も削除しない）' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->DELETE();
-    is scalar @$r, 5;
+    assert_result_meta($r, 5, $base_attrs);
+    is scalar @{ data_rows($r) }, 5;
 };
 
 subtest 'DELETE: 一致なしで全行残る' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->DELETE(where { $_->{b} > 999 });
-    is scalar @$r, 5;
+    assert_result_meta($r, 5, $base_attrs);
+    is scalar @{ data_rows($r) }, 5;
 };
 
 subtest 'DELETE: having と組み合わせて削除できる' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->DELETE(having { count_by('b') > 1 });
-    is scalar @$r, 1;
-    is $r->[0]{a}, 'carol';
+    my $rows = data_rows($r);
+    assert_result_meta($r, 1, $base_attrs);
+    is scalar @$rows, 1;
+    is $rows->[0]{a}, 'carol';
 };
 
 subtest 'DELETE: _idx は出力に含まれない' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->DELETE(where { $_->{b} > 999 });
-    ok !exists $r->[0]{_idx};
+    my $rows = data_rows($r);
+    ok !exists $rows->[0]{_idx};
 };
 
 subtest 'DELETE: 元テーブルは変更されない' => sub {
@@ -288,7 +350,7 @@ subtest 'DELETE: as で count/affect が返る' => sub {
     our $d1;
     my $hq = HashQuery->new(\@base, as $d1);
     $hq->DELETE(where { $_->{b} == 10 });
-    is $d1->{'#'}{count},  3;
+    is $d1->{count},  3;
     is $d1->{affect}, 2;
 };
 
@@ -296,7 +358,7 @@ subtest 'DELETE: SELECT と対称動作する' => sub {
     my $hq = HashQuery->new(\@base);
     my $selected = $hq->SELECT('*', where { $_->{b} == 10 });
     my $deleted  = $hq->DELETE(where { $_->{b} == 10 });
-    is scalar @$selected + scalar @$deleted, 5;
+    is scalar @{ data_rows($selected) } + scalar @{ data_rows($deleted) }, 5;
 };
 
 subtest 'DELETE: as - 全件削除で結果 0 件でも alias は hashref を返す' => sub {
@@ -304,7 +366,7 @@ subtest 'DELETE: as - 全件削除で結果 0 件でも alias は hashref を返
     my $hq = HashQuery->new(\@base, as $d_zero);
     $hq->DELETE(where { $_->{b} >= 0 });
     is ref($d_zero), 'HASH';
-    is $d_zero->{'#'}{count}, 0;
+    is $d_zero->{count}, 0;
     is $d_zero->{affect}, 5;
 };
 
@@ -315,8 +377,10 @@ subtest 'DELETE: as - 全件削除で結果 0 件でも alias は hashref を返
 subtest 'UPDATE: where にマッチした行を更新して全行返す' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->UPDATE({ b => 99 }, where { $_->{b} == 10 });
-    is scalar @$r, 5;
-    my @updated = grep { $_->{b} == 99 } @$r;
+    my $rows = data_rows($r);
+    assert_result_meta($r, 5, $base_attrs);
+    is scalar @$rows, 5;
+    my @updated = grep { $_->{b} == 99 } @$rows;
     my @names   = sort map { $_->{a} } @updated;
     is_deeply \@names, [qw/alice dave/];
 };
@@ -324,40 +388,49 @@ subtest 'UPDATE: where にマッチした行を更新して全行返す' => sub 
 subtest 'UPDATE: set 関数形式でも更新できる' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->UPDATE(set(b => 99), where { $_->{b} == 10 });
-    is scalar @$r, 5;
-    my @updated = grep { $_->{b} == 99 } @$r;
+    my $rows = data_rows($r);
+    assert_result_meta($r, 5, $base_attrs);
+    is scalar @$rows, 5;
+    my @updated = grep { $_->{b} == 99 } @$rows;
     is scalar @updated, 2;
 };
 
 subtest 'UPDATE: 条件なしで全行更新する' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->UPDATE({ b => 0 });
-    is scalar @$r, 5;
-    my @vals = map { $_->{b} } @$r;
+    my $rows = data_rows($r);
+    assert_result_meta($r, 5, $base_attrs);
+    is scalar @$rows, 5;
+    my @vals = map { $_->{b} } @$rows;
     is_deeply \@vals, [0, 0, 0, 0, 0];
 };
 
 subtest 'UPDATE: 一致なしで全行そのまま返す' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->UPDATE({ b => 0 }, where { $_->{b} > 999 });
-    is scalar @$r, 5;
-    my @vals = map { $_->{b} } @$r;
+    my $rows = data_rows($r);
+    assert_result_meta($r, 5, $base_attrs);
+    is scalar @$rows, 5;
+    my @vals = map { $_->{b} } @$rows;
     is_deeply \@vals, [10, 20, 30, 10, 20];
 };
 
 subtest 'UPDATE: having と組み合わせて更新できる' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->UPDATE({ b => 0 }, having { count_by('b') > 1 });
-    my @zeroed = grep { $_->{b} == 0 } @$r;
+    my $rows = data_rows($r);
+    assert_result_meta($r, 5, $base_attrs);
+    my @zeroed = grep { $_->{b} == 0 } @$rows;
     is scalar @zeroed, 4;
-    my @intact = grep { $_->{b} != 0 } @$r;
+    my @intact = grep { $_->{b} != 0 } @$rows;
     is $intact[0]{a}, 'carol';
 };
 
 subtest 'UPDATE: 複数カラムを同時に更新できる' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->UPDATE({ b => 0, c => 0 }, where { $_->{a} eq 'alice' });
-    my ($alice) = grep { $_->{a} eq 'alice' } @$r;
+    assert_result_meta($r, 5, $base_attrs);
+    my ($alice) = grep { $_->{a} eq 'alice' } @{ data_rows($r) };
     is $alice->{b}, 0;
     is $alice->{c}, 0;
 };
@@ -365,7 +438,8 @@ subtest 'UPDATE: 複数カラムを同時に更新できる' => sub {
 subtest 'UPDATE: _idx は出力に含まれない' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->UPDATE({ b => 0 });
-    ok !exists $r->[0]{_idx};
+    my $rows = data_rows($r);
+    ok !exists $rows->[0]{_idx};
 };
 
 subtest 'UPDATE: 元テーブルは変更されない' => sub {
@@ -380,7 +454,7 @@ subtest 'UPDATE: as で count/affect が返る' => sub {
     our $u1;
     my $hq = HashQuery->new(\@base, as $u1);
     $hq->UPDATE({ b => 0 }, where { $_->{b} == 10 });
-    is $u1->{'#'}{count},  5;
+    is $u1->{count},  5;
     is $u1->{affect}, 2;
 };
 
@@ -403,55 +477,65 @@ subtest 'UPDATE: ハッシュリファレンス以外を渡すと die する' =>
 subtest 'like: パターンマッチする' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*', where { $_->{a}->like('a%') });
-    is scalar @$r, 1;
-    is $r->[0]{a}, 'alice';
+    my $rows = data_rows($r);
+    assert_result_meta($r, 1, $base_attrs);
+    is scalar @$rows, 1;
+    is $rows->[0]{a}, 'alice';
 };
 
 subtest 'like: % で複数文字にマッチする' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*', where { $_->{a}->like('%e') });
-    my @names = sort map { $_->{a} } @$r;
+    assert_result_meta($r, 3, $base_attrs);
+    my @names = sort map { $_->{a} } @{ data_rows($r) };
     is_deeply \@names, [qw/alice dave eve/];
 };
 
 subtest 'not_like: パターンに一致しない行を返す' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*', where { $_->{a}->not_like('a%') });
-    is scalar @$r, 4;
-    ok !grep { $_->{a} eq 'alice' } @$r;
+    my $rows = data_rows($r);
+    assert_result_meta($r, 4, $base_attrs);
+    is scalar @$rows, 4;
+    ok !grep { $_->{a} eq 'alice' } @$rows;
 };
 
 subtest 'between: 範囲内の行を返す（両端含む）' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*', where { $_->{b}->between(10, 20) });
-    is scalar @$r, 4;
+    assert_result_meta($r, 4, $base_attrs);
+    is scalar @{ data_rows($r) }, 4;
 };
 
 subtest 'between: 排他境界で範囲を絞れる' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*', where { $_->{b}->between('10!', '20!') });
-    is scalar @$r, 0;
+    is scalar @{ data_rows($r) }, 0;
 };
 
 subtest 'in: リストに含まれる行を返す' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*', where { $_->{b}->in(10, 30) });
-    my @names = sort map { $_->{a} } @$r;
+    assert_result_meta($r, 3, $base_attrs);
+    my @names = sort map { $_->{a} } @{ data_rows($r) };
     is_deeply \@names, [qw/alice carol dave/];
 };
 
 subtest 'not_in: リストに含まれない行を返す' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*', where { $_->{b}->not_in(10, 30) });
-    my @names = sort map { $_->{a} } @$r;
+    assert_result_meta($r, 2, $base_attrs);
+    my @names = sort map { $_->{a} } @{ data_rows($r) };
     is_deeply \@names, [qw/bob eve/];
 };
 
 subtest 'asNull: undef を デフォルト値に置き換える' => sub {
     my $hq = HashQuery->new(\@null_tbl);
     my $r = $hq->SELECT('*', where { $_->{val}->asNull(0) != 0 });
-    is scalar @$r, 1;
-    is $r->[0]{name}, 'y';
+    my $rows = data_rows($r);
+    assert_result_meta($r, 1, $null_attrs);
+    is scalar @$rows, 1;
+    is $rows->[0]{name}, 'y';
 };
 
 # ===========================================================================
@@ -461,35 +545,41 @@ subtest 'asNull: undef を デフォルト値に置き換える' => sub {
 subtest 'count_by: グループ内の行数を返す' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*', having { count_by('b') == 2 });
-    is scalar @$r, 4;
-    ok !grep { $_->{a} eq 'carol' } @$r;
+    my $rows = data_rows($r);
+    assert_result_meta($r, 4, $base_attrs);
+    is scalar @$rows, 4;
+    ok !grep { $_->{a} eq 'carol' } @$rows;
 };
 
 subtest 'max_by: グループ内の最大値を返す' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*', having { max_by('c', 'b') == 250 });
-    my @names = sort map { $_->{a} } @$r;
+    assert_result_meta($r, 2, $base_attrs);
+    my @names = sort map { $_->{a} } @{ data_rows($r) };
     is_deeply \@names, [qw/bob eve/];
 };
 
 subtest 'min_by: グループ内の最小値を返す' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*', having { min_by('c', 'b') == 100 });
-    my @names = sort map { $_->{a} } @$r;
+    assert_result_meta($r, 2, $base_attrs);
+    my @names = sort map { $_->{a} } @{ data_rows($r) };
     is_deeply \@names, [qw/alice dave/];
 };
 
 subtest 'first_by: グループ内の先頭行を返す' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*', having { first_by('b') });
-    my @names = sort map { $_->{a} } @$r;
+    assert_result_meta($r, 3, $base_attrs);
+    my @names = sort map { $_->{a} } @{ data_rows($r) };
     is_deeply \@names, [qw/alice bob carol/];
 };
 
 subtest 'last_by: グループ内の末尾行を返す' => sub {
     my $hq = HashQuery->new(\@base);
     my $r = $hq->SELECT('*', having { last_by('b') });
-    my @names = sort map { $_->{a} } @$r;
+    assert_result_meta($r, 3, $base_attrs);
+    my @names = sort map { $_->{a} } @{ data_rows($r) };
     is_deeply \@names, [qw/carol dave eve/];
     # carol: b=30（グループ内唯一）、dave: b=10の末尾、eve: b=20の末尾
 };
@@ -501,16 +591,20 @@ subtest 'last_by: グループ内の末尾行を返す' => sub {
 subtest 'grep_concat: マッチした行の値を返す' => sub {
     my $hq = HashQuery->new(\@log_tbl);
     my $r = $hq->SELECT('*', where { grep_concat('msg', qr/ERROR/) ne '' });
-    is scalar @$r, 2;
-    ok !grep { $_->{msg} !~ /ERROR/ } @$r;
+    my $rows = data_rows($r);
+    assert_result_meta($r, 2, $log_attrs);
+    is scalar @$rows, 2;
+    ok !grep { $_->{msg} !~ /ERROR/ } @$rows;
 };
 
 subtest 'grep_concat: 前後行の値を連結した文字列を返す' => sub {
     my $hq = HashQuery->new(\@log_tbl);
     my $r = $hq->SELECT('*', where { grep_concat('msg', qr/ERROR/, -1, 1) ne '' });
     # grep_concat は現在行がマッチした場合のみ非空文字列を返す（ERROR行のみ選択）
-    is scalar @$r, 2;
-    ok !grep { $_->{msg} !~ /ERROR/ } @$r;
+    my $rows = data_rows($r);
+    assert_result_meta($r, 2, $log_attrs);
+    is scalar @$rows, 2;
+    ok !grep { $_->{msg} !~ /ERROR/ } @$rows;
 };
 
 subtest 'grep_concat: 指定カラムの値のみ連結する' => sub {
@@ -519,8 +613,10 @@ subtest 'grep_concat: 指定カラムの値のみ連結する' => sub {
         my $ctx = grep_concat('msg', qr/ERROR connection/, 0, 1);
         $ctx =~ /ERROR connection failed/ && $ctx =~ /retrying/;
     });
-    is scalar @$r, 1;
-    is $r->[0]{line}, 2;
+    my $rows = data_rows($r);
+    assert_result_meta($r, 1, $log_attrs);
+    is scalar @$rows, 1;
+    is $rows->[0]{line}, 2;
 };
 
 # ===========================================================================
@@ -531,8 +627,10 @@ subtest '実用: as を使って where でフィルタする' => sub {
     our $m1;
     my $hq = HashQuery->new(\@members, as $m1);
     my $r = $hq->SELECT([qw/team name/], where { $m1->{role} eq 'lead' });
-    is scalar @$r, 3;
-    ok !grep { $_->{role} } @$r;   # 出力列に role は含まれない
+    my $rows = data_rows($r);
+    assert_result_meta($r, 3, $team_name_attrs, [qw/team name/]);
+    is scalar @$rows, 3;
+    ok !grep { $_->{role} } @$rows;   # 出力列に role は含まれない
 };
 
 subtest '実用: スコア75以上かつチームに2人以上いるメンバーを取得' => sub {
@@ -543,8 +641,10 @@ subtest '実用: スコア75以上かつチームに2人以上いるメンバー
         where  { $m2->{score} >= 75 },
         having { count_by('team') >= 2 },
     );
-    is scalar @$r, 3;
-    is_deeply [sort map { $_->{name} } @$r], [qw/alice bob carol/];
+    my $rows = data_rows($r);
+    assert_result_meta($r, 3, $team_name_score_attrs, [qw/team name score/]);
+    is scalar @$rows, 3;
+    is_deeply [sort map { $_->{name} } @$rows], [qw/alice bob carol/];
 };
 
 # ===========================================================================
@@ -583,22 +683,14 @@ subtest 'new: rows が空でメタに order がある場合、列を復元でき
     my $hq = HashQuery->new(\@meta_empty_with_order);
     isa_ok $hq, 'HashQuery';
     my $r = $hq->SELECT('*');
-    my $m = $r->[0]{'#'};
-    ok defined $m, 'メタが付いている';
-    is_deeply $m->{order}, [qw/a b/], 'order から列が復元されている';
-    my @rows = @{$r}[1..$#$r];
-    is scalar @rows, 0, 'データ行は 0 件';
+    is_deeply $r, [], '結果 rows が 0 件なら [] を返す';
 };
 
 subtest 'new: rows が空でメタに attrs のみある場合、列を辞書順で復元できる' => sub {
     my $hq = HashQuery->new(\@meta_empty_attrs_only);
     isa_ok $hq, 'HashQuery';
     my $r = $hq->SELECT('*');
-    my $m = $r->[0]{'#'};
-    ok defined $m, 'メタが付いている';
-    is_deeply $m->{order}, [qw/x y/], 'attrs キーの辞書順で列が復元されている';
-    my @rows = @{$r}[1..$#$r];
-    is scalar @rows, 0, 'データ行は 0 件';
+    is_deeply $r, [], '結果 rows が 0 件なら [] を返す';
 };
 
 subtest 'SELECT: メタ付き入力で * を指定すると全列の attrs/order が返る' => sub {
@@ -642,11 +734,11 @@ subtest 'SELECT: メタ付き入力で except を使うと attrs/order が射影
     ok !exists $m->{attrs}{c}, 'c は attrs に含まれない';
 };
 
-subtest 'SELECT: プレーン入力は従来どおりメタなしで返る' => sub {
+subtest 'SELECT: プレーン入力も meta 付き AoH で返る' => sub {
     my $hq = HashQuery->new(\@base);
     my $r  = $hq->SELECT('*');
-    ok !exists $r->[0]{'#'}, 'メタ行がない';
-    is scalar @$r, 5;
+    ok exists $r->[0]{'#'}, 'メタ行がある';
+    is scalar @$r, 6;
 };
 
 subtest 'DELETE: メタ付き入力は元メタをそのまま返す' => sub {
@@ -660,10 +752,10 @@ subtest 'DELETE: メタ付き入力は元メタをそのまま返す' => sub {
     is scalar @rows, 2;
 };
 
-subtest 'DELETE: プレーン入力は従来どおりメタなしで返る' => sub {
+subtest 'DELETE: プレーン入力も meta 付き AoH で返る' => sub {
     my $hq = HashQuery->new(\@base);
     my $r  = $hq->DELETE(where { $_->{b} == 10 });
-    ok !exists $r->[0]{'#'}, 'メタ行がない';
+    ok exists $r->[0]{'#'}, 'メタ行がある';
 };
 
 subtest 'UPDATE: メタ付き入力は元メタをそのまま返す' => sub {
@@ -679,10 +771,10 @@ subtest 'UPDATE: メタ付き入力は元メタをそのまま返す' => sub {
     is scalar @updated, 1;
 };
 
-subtest 'UPDATE: プレーン入力は従来どおりメタなしで返る' => sub {
+subtest 'UPDATE: プレーン入力も meta 付き AoH で返る' => sub {
     my $hq = HashQuery->new(\@base);
     my $r  = $hq->UPDATE({ b => 99 }, where { $_->{b} == 10 });
-    ok !exists $r->[0]{'#'}, 'メタ行がない';
+    ok exists $r->[0]{'#'}, 'メタ行がある';
 };
 
 done_testing;

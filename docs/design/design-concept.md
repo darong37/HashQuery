@@ -1,17 +1,6 @@
 # Design Concept
 Date: 2026-04-09
 
-## Instruction
-この文書は設計を決めるための単一の指示書である。
-内容は `Terms`、`Concept`、`API` の順で定める。
-
-- `Terms`: このプロジェクトで使う用語を定める
-- `Concept`: このプロジェクトの設計方針を書く
-- `API`: その方針を外から見える操作として定める
-- `Terms` / `Concept` / `API` を先に定め、必要な実装上の誘導は `To Do` に一時的に書く
-- `Concept` は何を大事にするかを書く。実装途中の補助線は `To Do` に寄せる
-- `To Do` は一時的な作業規約を書く場所であり、整理が終わったら削除する
-
 ## Terms
 用語は次のとおり。
 
@@ -38,10 +27,12 @@ Date: 2026-04-09
 - `count` は `meta` を除いた `rows` 件数を表すスカラー値
 - `order` はカラム名の並びを表す配列リファレンス
 - `attrs` と `count` が必須、`order` は任意とする
-- `alias`: `as $var` で渡す変数。`where` / `having` 内では現在行を参照し、各メソッド完了後には結果 meta と `affect` を受け取る
+- `alias`: `as $var` で渡す変数。`where` / `having` 内では現在行を参照し、各メソッド完了後には結果サマリとして `count` と `affect` を受け取る
 - `where`: 行フィルタ
 - `having`: 行列フィルタ
 - `DSL node`: `as` / `except` / `set` / `where` / `having` が返す引数用データ構造
+
+## Concept
 
 ### 第一コンセプト: 1つの AoH を単一対象として SQL 風に扱う
 
@@ -73,7 +64,7 @@ meta は付いていればよいのではなく、常に実際の rows と一致
 - `SELECT` は列の射影、`DELETE` は条件一致行の除外、`UPDATE` は条件一致行への固定値代入とする
 - `SELECT` と `DELETE` は同じ条件 DSL を共有する。ある条件を `SELECT` に使えばその条件に合う rows を返し、同じ条件を `DELETE` に使えばその条件に合わない rows の結果を返す
 - `UPDATE` は更新対象のキー名を直接指定する。ここで指定できるのは `attrs` に存在するキーに限る
-- `as` を指定した場合、各メソッド完了後の `$var` には `{ '#' => meta, affect => N }` 形式の hashref を入れる
+- `as` を指定した場合、各メソッド完了後の `$var` には `{ count => N, affect => N }` 形式の hashref を入れる
 - meta を持たない AoH も meta 付き AoH も入力として受け取れる
 - 入力 AoH の成立条件や meta の整備責任は TableTools 側にある前提とする
 - 出力は原則として常に meta 付き AoH とする
@@ -88,13 +79,13 @@ meta は付いていればよいのではなく、常に実際の rows と一致
 
 - `$aoh`: 入力 AoH
 - `$hq`: `HashQuery` インスタンス
-- `$opts`: `new()` のオプション hashref
-- `$cols_arg`: `SELECT()` 第1引数。`'*'`、配列リファレンス、`except(...)` のいずれか
+- `$as_dsl`: `new()` 第2引数。`as $alias` が作る DSL node
+- `$cols_expr`: `SELECT()` 第1引数。列指定の表現。`'*'`、配列リファレンス、`except(...)` のいずれか
 - `$upd_arg`: `UPDATE()` 第1引数。更新内容の hashref または `set(...)`
 - `$dsl`: `where(...)` または `having(...)` の戻り値
 - `@dsls`: `SELECT` / `DELETE` / `UPDATE` の後続引数として渡す `where(...)` / `having(...)` の並び
 - `$alias`: `as $var` で `new()` に渡すスカラー変数
-- `$alias_meta`: 実行後に `$alias` に格納される hashref
+- `$alias_result`: 実行後に `$alias` に格納される hashref
 
 利用は大きく 2 段階に分かれる。
 
@@ -115,11 +106,11 @@ meta は付いていればよいのではなく、常に実際の rows と一致
 |---|---|---|---|
 | `HashQuery->new($aoh)` | インスタンス生成 | `$aoh` | `$hq` |
 | `HashQuery->new($aoh, as $alias)` | alias 付きインスタンス生成 | `$aoh`, `$alias` | `$hq` |
-| `HashQuery->new($aoh, { as => \$alias })` | alias 付きインスタンス生成 | `$aoh`, `$opts` | `$hq` |
-| `$hq->SELECT($cols_arg, @dsls)` | 列射影して返す | `$cols_arg`, `@dsls` | `meta 付き AoH` または `[]` |
+| `HashQuery->new($aoh, { as => \$alias })` | alias 付きインスタンス生成 | `$aoh`, `$as_dsl` | `$hq` |
+| `$hq->SELECT($cols_expr, @dsls)` | 列射影して返す | `$cols_expr`, `@dsls` | `meta 付き AoH` または `[]` |
 | `$hq->DELETE(@dsls)` | 一致行を除外して返す | `@dsls` | `meta 付き AoH` または `[]` |
 | `$hq->UPDATE($upd_arg, @dsls)` | 一致行を更新して全行返す | `$upd_arg`, `@dsls` | `meta 付き AoH` または `[]` |
-| `as $alias` | `new()` 用 alias 指定と実行結果 meta の受け取り先指定 | `$alias` | DSL node |
+| `as $alias` | `new()` 用 alias 指定と実行結果サマリの受け取り先指定 | `$alias` | DSL node |
 | `except(@cols)` | SELECT 除外列指定 | `@cols` | DSL node |
 | `set(%pairs)` | UPDATE 内容指定 | `%pairs` | hashref |
 | `where { ... }` | 行フィルタ指定 | block | DSL node |
@@ -135,62 +126,82 @@ meta は付いていればよいのではなく、常に実際の rows と一致
 
 ```perl
 {
-    '#'    => { attrs => {...}, count => N, order => [...] },  # order は必要に応じて持つ
+    count  => N,
     affect => N,
 }
 ```
 
-- `'#'->{count}` は返却 `rows` 件数を表す
+- `count` は返却 `rows` 件数を表す
 - `affect` は `SELECT` では結果件数、`DELETE` では削除件数、`UPDATE` では更新件数を表す
-- 結果 `rows` が 0 件のときも alias は hashref のまま返し、`'#'->{count}` は 0 とする。`affect` は各メソッドで定義された意味に従う
+- 結果 `rows` が 0 件のときも alias は hashref のまま返し、`count` は 0 とする。`affect` は各メソッドで定義された意味に従う
 
 ## To Do
 
 この `To Do` は実装途中の一時的な作業規約である。
 ここに書いた項目は実装中は必ず守り、整理が終わったらこの節ごと削除する。
 
-- 返却 AoH の組み立て用に次の共通ルーチンを実装し、返却値は必ずこれを通して作る
+- HashQuery の返り値は、結果 `rows` が 0 件なら常に空集合 `[]` とする。このとき `meta` は返さない
+- alias は返り値とは独立した結果サマリとし、返り値 AoH の `meta` とは切り離して扱う
+- したがって `_build_return()` は alias を扱わず、`rows` と `meta` だけから返り値 AoH を組み立てる
+- alias は別ルーチン `_set_alias()` で設定し、返り値の組み立てとは分離する
+- alias が持つのは `count` と `affect` だけとし、`'#'` の meta は持たせない
+- `new()` は `TableTools::validate()` を通す前提なので、内部処理では `meta` は常に存在するものとして扱う。もし欠けていたら論理的にありえない内部エラーとして die する
+
+- meta の `count` を結果 rows 件数に合わせるために、次の共通ルーチンを実装する
 
 ```perl
-sub _build_result {
-    my ($rows, $meta) = @_;
+sub _set_meta_count {
+    my ($meta, $rows) = @_;
 
     $meta->{'#'}{count} = scalar @$rows if $meta;
+}
+```
+
+- `SELECT` の返却列に合わせて `attrs` / `order` を射影するために、次の共通ルーチンを実装する
+
+```perl
+sub _set_meta_attrs {
+    my ($meta, $cols) = @_;
+
+    return unless $meta;
+
+    my $attrs = $meta->{'#'}{attrs} // {};
+    $meta->{'#'}{attrs} = { map { $_ => $attrs->{$_} } @$cols };
+    $meta->{'#'}{order} = [@$cols];
+}
+```
+
+- 返却値の組み立て用に次の共通ルーチンを実装し、返却値は必ずこれを通して作る
+
+```perl
+sub _build_return {
+    my ($rows, $meta) = @_;
+
     return [] unless @$rows;
     return attach($rows, $meta);
 }
 ```
 
-- alias 変数への代入用に次の alias 専用ルーチンを実装し、`as` を使う全メソッドは必ずこれを通す
+- alias 設定用に次の共通ルーチンを実装する
 
 ```perl
 sub _set_alias {
-    my ($alias, $meta, $affect) = @_;
+    my ($alias, $count, $affect) = @_;
 
     return unless $alias;
 
-    ${$alias} = {
-        '#'    => $meta->{'#'},
+    $$alias = {
+        count  => $count,
         affect => $affect,
     };
 }
 ```
 
-- DSL による rows 絞り込み用に次の共通ルーチンを実装し、`SELECT` / `DELETE` / `UPDATE` の条件適用は必ずこれを通す
-
-```perl
-sub _filter_rows {
-    my ($rows, $alias, @dsls) = @_;
-
-    ...
-
-    return $rows;
-}
-```
-
 - 各メソッドは返却直前までに rows と整合する meta を確定しておく
-- `_build_result()` は rows と meta を受ける
-- `_build_result()` は `meta` があるとき、その `count` を結果 rows 件数に合わせてから返却値を組み立てる
-- `_set_alias()` は meta と affect を受け、`{ '#' => meta, affect => N }` を組み立てる
-- 結果 rows が 0 件でも `_set_alias()` は hashref を返し、`'#'->{count}` は 0 とする。`affect` は各メソッドで定義された意味に従う
-- `_filter_rows()` は rows と alias と `@dsls` を受け、DSL 適用後の rows を返す
+- `DELETE` / `UPDATE` は `_set_meta_count()` を使ってから `_build_return()` を呼ぶ
+- `SELECT` は `_set_meta_count()` と `_set_meta_attrs()` を使ってから `_build_return()` を呼ぶ
+- alias が必要なときは、各メソッドの中で `_set_alias()` を別に呼ぶ
+- `_build_return()` は rows と meta だけを受ける
+- `_set_meta_count()` と `_set_meta_attrs()` は受け取った meta をその場で更新する
+- `_set_alias()` は `count` と `affect` だけを組み立てる
+- 結果 rows が 0 件でも alias は設定し、`count` は 0 とする。`affect` は各メソッドで定義された意味に従う
