@@ -2,9 +2,7 @@
 
 Perl の AOH（Array of Hash）データを SQL に似た DSL 構文でクエリするためのシンタックスシュガーです。([English](README.md)) SQL に忠実な構文を採用しているため、SQL を知っている開発者がそのまま直感的に読み書きできます。
 
-`HashQuery->new(\@table)` で AOH からインスタンスを生成し、`SELECT` / `DELETE` / `UPDATE` をインスタンスメソッドとして呼び出します。`where` は行を個別にフィルタし、`having` はテーブル全体を対象とした集約条件でフィルタします。これは SQL の `WHERE` / `HAVING` の区別に対応しています。
-
-TableTools 形式のメタ情報付き配列（先頭要素に `{ '#' => { attrs, order } }` を持つ配列）も受け取れます。メタが存在する場合、`SELECT` は出力列に射影したメタを返し、`DELETE` / `UPDATE` は元のメタをそのまま返します。
+`HashQuery->new(\@aoh)` でインスタンスを生成します。入口で `TableTools::validate()` を通すため meta が常に生成されます。`SELECT` / `DELETE` / `UPDATE` をインスタンスメソッドとして呼び出し、常に meta 付き AoH を返します（結果が 0 件のときのみ `[]`）。`where` は行を個別にフィルタし、`having` はテーブル全体を対象とした集約条件でフィルタします。これは SQL の `WHERE` / `HAVING` の区別に対応しています。
 
 ## 動作環境
 
@@ -51,6 +49,8 @@ my $result = $hq->SELECT(
 ```
 
 ### メタ情報付き配列（TableTools 形式）
+
+プレーン AOH も TableTools 形式（先頭要素に `{ '#' => { attrs, order } }` を持つ配列）も受け取れます。`SELECT` は出力列に射影したメタを返し、`DELETE` / `UPDATE` は元のメタをそのまま返します。
 
 ```perl
 my $table = [
@@ -144,9 +144,9 @@ perl test/hashquery.t
 出力例:
 
 ```
-1..74
+1..76
 ok 1 - as: { as => \$var } を返す
 ok 2 - except: { except => [...] } を返す
 ...
-ok 74 - UPDATE: プレーン入力は従来どおりメタなしで返る
+ok 76 - UPDATE: プレーン入力も meta 付き AoH で返る
 ```

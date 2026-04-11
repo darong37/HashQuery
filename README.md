@@ -2,9 +2,7 @@
 
 Syntactic sugar for querying Perl AOH (Array of Hash) data with SQL-like DSL syntax. ([日本語版](README_ja.md)) The DSL closely mirrors SQL so that anyone familiar with SQL can read and write queries intuitively.
 
-`HashQuery->new(\@table)` creates an instance from an AOH table. `SELECT` / `DELETE` / `UPDATE` are called as instance methods. `where` filters rows individually; `having` filters based on aggregate conditions across the whole table, matching the SQL `WHERE` / `HAVING` distinction.
-
-TableTools-format arrays (with a leading meta element `{ '#' => { attrs, order } }`) are also accepted. When meta is present, `SELECT` returns a projected meta element, and `DELETE` / `UPDATE` return the original meta element unchanged.
+`HashQuery->new(\@aoh)` creates an instance. The input is passed through `TableTools::validate()` at the entry point so that meta is always generated. `SELECT` / `DELETE` / `UPDATE` are called as instance methods and always return a meta-equipped AOH (or `[]` when the result is empty). `where` filters rows individually; `having` filters based on aggregate conditions across the whole table, matching the SQL `WHERE` / `HAVING` distinction.
 
 ## Requirements
 
@@ -51,6 +49,8 @@ my $result = $hq->SELECT(
 ```
 
 ### Meta-equipped input (TableTools format)
+
+Plain AOH and TableTools-format AOH (with a leading `{ '#' => { attrs, order } }` element) are both accepted. `SELECT` projects meta to the output columns; `DELETE` / `UPDATE` return the original meta unchanged.
 
 ```perl
 my $table = [
@@ -144,9 +144,9 @@ perl test/hashquery.t
 Output:
 
 ```
-1..74
+1..76
 ok 1 - as: { as => \$var } を返す
 ok 2 - except: { except => [...] } を返す
 ...
-ok 74 - UPDATE: プレーン入力は従来どおりメタなしで返る
+ok 76 - UPDATE: プレーン入力も meta 付き AoH で返る
 ```
